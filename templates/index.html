@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}대시보드 - 네이버 순위 트래커{% endblock %}
+{% block content %}
+
+<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;">
+  <div>
+    <div class="page-title">📊 광고주 대시보드</div>
+    <div class="page-sub">광고주별 네이버 쇼핑 순위 현황</div>
+  </div>
+</div>
+
+<!-- 광고주 추가 폼 -->
+<div class="card">
+  <div class="card-title">➕ 광고주 추가</div>
+  <form action="/clients/add" method="post">
+    <div class="form-row">
+      <div class="form-group">
+        <label>광고주명 *</label>
+        <input type="text" name="name" placeholder="예: 홍길동스토어" required>
+      </div>
+      <div class="form-group">
+        <label>메모 (선택)</label>
+        <input type="text" name="memo" placeholder="예: 뷰티 브랜드, 3개 상품 관리 중">
+      </div>
+      <div style="align-self:flex-end;">
+        <button type="submit" class="btn btn-primary">추가</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<!-- 광고주 목록 -->
+{% if clients %}
+<div class="card">
+  <div class="card-title">📋 광고주 목록 ({{ clients|length }}개)</div>
+  <table>
+    <thead>
+      <tr>
+        <th>광고주명</th>
+        <th>메모</th>
+        <th>추적 조합</th>
+        <th>순위권</th>
+        <th>최고순위</th>
+        <th>마지막 확인</th>
+        <th>관리</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for cl in clients %}
+    {% set s = summary.get(cl.id, {}) %}
+    <tr style="cursor:pointer;" onclick="location.href='/clients/{{ cl.id }}'">
+      <td>
+        <a href="/clients/{{ cl.id }}" style="color:#03c75a;font-weight:700;">{{ cl.name }}</a>
+      </td>
+      <td style="color:#64748b;font-size:.82rem;">{{ cl.memo or '-' }}</td>
+      <td>
+        {% if s.total_combos %}
+          <span class="badge badge-blue">{{ s.total_combos }}건</span>
+        {% else %}
+          <span style="color:#475569">-</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if s.in_rank is not none and s.total_combos %}
+          <span class="badge badge-green">{{ s.in_rank }} / {{ s.total_combos }}</span>
+        {% else %}
+          <span style="color:#475569">-</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if s.best_rank %}
+          <span class="rank-{% if s.best_rank <= 10 %}top{% elif s.best_rank <= 30 %}good{% elif s.best_rank <= 100 %}mid{% else %}low{% endif %}">
+            {{ s.best_rank }}위
+          </span>
+        {% else %}
+          <span style="color:#475569">-</span>
+        {% endif %}
+      </td>
+      <td style="color:#64748b;font-size:.8rem;">{{ s.last_check or '-' }}</td>
+      <td onclick="event.stopPropagation()">
+        <form action="/clients/{{ cl.id }}/delete" method="post" onsubmit="return confirm('광고주 {{ cl.name }}을 삭제할까요? 모든 데이터가 삭제됩니다.')">
+          <button type="submit" class="btn btn-danger btn-sm">삭제</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card" style="text-align:center;padding:48px;color:#475569;">
+  <div style="font-size:3rem;margin-bottom:12px;">📭</div>
+  <div style="font-size:1rem;margin-bottom:6px;">등록된 광고주가 없습니다.</div>
+  <div style="font-size:.85rem;">위 폼에서 광고주를 추가해보세요!</div>
+</div>
+{% endif %}
+
+{% endblock %}
