@@ -1,0 +1,564 @@
+{% extends "base.html" %}
+{% block title %}업무 자동화 - 네이버 순위 트래커{% endblock %}
+
+{% block extra_style %}
+<style>
+/* ── 자동화 페이지 레이아웃 ── */
+.auto-tabs{display:flex;gap:0;border-bottom:2px solid #334155;margin-bottom:28px;}
+.auto-tab{padding:10px 22px;cursor:pointer;font-size:.875rem;font-weight:600;color:#64748b;border-bottom:2px solid transparent;margin-bottom:-2px;transition:.15s;}
+.auto-tab.active{color:#03c75a;border-bottom-color:#03c75a;}
+.auto-tab:hover:not(.active){color:#e2e8f0;background:#1e2433;border-radius:6px 6px 0 0;}
+
+.tab-panel{display:none;} .tab-panel.active{display:block;}
+
+/* ── 입력 폼 ── */
+.order-input-area{
+  background:#1e2433;border-radius:12px;padding:24px;margin-bottom:20px;
+}
+.order-input-area textarea{
+  width:100%;min-height:160px;resize:vertical;
+  background:#0f1117;border:1px solid #334155;color:#e2e8f0;
+  padding:12px;border-radius:8px;font-size:.875rem;line-height:1.6;
+  font-family:inherit;
+}
+.order-input-area textarea:focus{border-color:#03c75a;outline:none;box-shadow:0 0 0 2px #03c75a22;}
+
+.fields-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;}
+.fields-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
+.field-hint{font-size:.75rem;color:#475569;margin-top:3px;}
+
+/* ── 시나리오 뱃지 ── */
+.scenario-tabs{display:flex;gap:8px;margin-bottom:20px;}
+.sc-tab{padding:7px 18px;border-radius:20px;cursor:pointer;font-size:.82rem;font-weight:600;
+  border:1px solid #334155;color:#64748b;transition:.15s;}
+.sc-tab.active{background:#03c75a22;color:#03c75a;border-color:#03c75a44;}
+.sc-tab:hover:not(.active){background:#253048;}
+
+/* ── 결과 테이블 ── */
+.result-section{background:#1e2433;border-radius:12px;padding:24px;margin-top:20px;}
+.result-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;}
+.result-title{font-size:1rem;font-weight:700;color:#f1f5f9;}
+.copy-btn{background:#03c75a;color:#fff;border:none;padding:8px 20px;border-radius:8px;
+  font-size:.82rem;font-weight:700;cursor:pointer;transition:.15s;display:flex;align-items:center;gap:6px;}
+.copy-btn:hover{background:#02b350;}
+.copy-btn.copied{background:#334155;color:#94a3b8;}
+
+.sheet-table-wrap{overflow-x:auto;border-radius:8px;}
+.sheet-table{border-collapse:collapse;min-width:900px;font-size:.8rem;}
+.sheet-table th{
+  background:#253048;color:#94a3b8;padding:8px 12px;border:1px solid #334155;
+  font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;
+}
+.sheet-table td{
+  padding:8px 12px;border:1px solid #2d3748;background:#0f1117;
+  vertical-align:middle;white-space:nowrap;
+}
+.sheet-table td.merged-top{background:#131b2e;color:#03c75a;font-weight:600;}
+.sheet-table td.merged-mid{background:#131b2e;color:#334155;font-size:.7rem;font-style:italic;}
+.sheet-table td.col-web{color:#f59e0b;font-weight:700;}
+.sheet-table td.col-formula{color:#334155;font-style:italic;}
+.sheet-table td.col-keyword{color:#3b82f6;font-weight:600;}
+.sheet-table td.editable{
+  background:#1e2433;color:#e2e8f0;cursor:text;
+}
+.sheet-table td.editable:focus{
+  outline:1px solid #03c75a;background:#253048;
+}
+.sheet-table tr:hover td:not(.merged-mid){background:#161d2e;}
+.row-num{color:#475569;font-size:.7rem;font-weight:600;padding:8px 6px !important;background:#0a0e1a !important;border-right:2px solid #334155 !important;}
+
+/* ── TSV 박스 ── */
+.tsv-box{background:#0a0e1a;border:1px solid #334155;border-radius:8px;padding:14px;
+  font-family:monospace;font-size:.78rem;color:#94a3b8;margin-top:16px;
+  white-space:pre;overflow-x:auto;max-height:160px;overflow-y:auto;line-height:1.5;}
+
+/* ── 파싱 결과 뱃지 ── */
+.parsed-fields{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;}
+.pf-badge{background:#1e2433;border:1px solid #334155;border-radius:6px;padding:5px 12px;
+  font-size:.78rem;color:#94a3b8;}
+.pf-badge span{color:#03c75a;font-weight:600;margin-left:4px;}
+
+/* 미션텍스트 편집 */
+.mission-edit{
+  width:100%;background:#0f1117;border:1px solid #334155;color:#e2e8f0;
+  padding:10px;border-radius:6px;font-size:.82rem;resize:vertical;min-height:80px;
+}
+
+/* info box */
+.info-box{background:#03c75a0d;border:1px solid #03c75a33;border-radius:8px;padding:14px;
+  font-size:.82rem;color:#94a3b8;line-height:1.6;margin-bottom:16px;}
+.info-box strong{color:#03c75a;}
+
+/* ── 섹션 제목 ── */
+.section-title{font-size:.8rem;font-weight:700;color:#64748b;text-transform:uppercase;
+  letter-spacing:.06em;margin-bottom:10px;display:flex;align-items:center;gap:6px;}
+.section-title::before{content:'';display:inline-block;width:3px;height:14px;
+  background:#03c75a;border-radius:2px;}
+
+/* 반응형 */
+@media(max-width:768px){.fields-grid{grid-template-columns:1fr 1fr;}.fields-grid-2{grid-template-columns:1fr;}}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-title">🚀 업무 자동화</div>
+  <div class="page-sub">리워드 마케팅 캠페인 자동 시트 생성</div>
+</div>
+
+<!-- 메인 탭 -->
+<div class="auto-tabs">
+  <div class="auto-tab active" onclick="switchAutoTab('reward')">🎯 리워드 마케팅</div>
+  <div class="auto-tab" onclick="switchAutoTab('bulk')">📋 일괄 처리 (준비중)</div>
+</div>
+
+<!-- ════ 리워드 마케팅 탭 ════ -->
+<div id="tab-reward" class="tab-panel active">
+
+  <!-- 시나리오 선택 -->
+  <div class="scenario-tabs">
+    <div class="sc-tab active" id="sc1-tab" onclick="switchScenario(1)">
+      📌 시나리오 1 — 키워드 제공
+    </div>
+    <div class="sc-tab" id="sc2-tab" onclick="switchScenario(2)">
+      🔍 시나리오 2 — 키워드 없음 (준비중)
+    </div>
+  </div>
+
+  <div class="info-box">
+    <strong>📋 사용법:</strong> 주문서 텍스트를 붙여넣으면 자동으로 필드를 파싱합니다. 또는 아래 입력란에 직접 입력하세요. 생성된 표를 복사해서 Google Sheets에 붙여넣으면 됩니다.
+  </div>
+
+  <!-- 주문서 붙여넣기 -->
+  <div class="order-input-area">
+    <div class="section-title">주문서 텍스트 붙여넣기 (자동 파싱)</div>
+    <textarea id="orderText" placeholder="주문서 내용을 여기에 붙여넣으세요...
+예시:
+시작일: 2025-03-01
+종료일: 2025-03-07
+키워드: 장뇌삼
+상품URL: https://smartstore.naver.com/dodamginseng/products/12345678
+상품명: 도담산삼 장뇌삼 10년근 100g
+일일트래픽: 50
+경과일수: 3
+총트래픽: 150"></textarea>
+    <div style="margin-top:10px;display:flex;gap:8px;">
+      <button class="btn btn-primary btn-sm" onclick="parseOrder()">🔍 자동 파싱</button>
+      <button class="btn btn-secondary btn-sm" onclick="clearAll()">🗑 초기화</button>
+    </div>
+    <div id="parsed-display" class="parsed-fields" style="display:none;"></div>
+  </div>
+
+  <!-- 수동 입력 -->
+  <div class="card" style="margin-bottom:20px;">
+    <div class="card-title">📝 캠페인 정보 입력</div>
+
+    <div class="fields-grid">
+      <div class="form-group">
+        <label>시작일</label>
+        <input type="text" id="f_start" placeholder="2025-03-01">
+      </div>
+      <div class="form-group">
+        <label>종료일</label>
+        <input type="text" id="f_end" placeholder="2025-03-07">
+      </div>
+      <div class="form-group">
+        <label>키워드</label>
+        <input type="text" id="f_keyword" placeholder="장뇌삼">
+        <div class="field-hint">시나리오 1: 광고주 제공 키워드</div>
+      </div>
+    </div>
+
+    <div class="fields-grid-2">
+      <div class="form-group">
+        <label>상품 URL</label>
+        <input type="text" id="f_url" placeholder="https://smartstore.naver.com/..." oninput="extractFromUrl()">
+        <div class="field-hint" id="url-extract-hint">URL 입력 시 상품번호/업체명 자동 추출</div>
+      </div>
+      <div class="form-group">
+        <label>상품명</label>
+        <input type="text" id="f_name" placeholder="도담산삼 장뇌삼 10년근 100g">
+      </div>
+    </div>
+
+    <div class="fields-grid">
+      <div class="form-group">
+        <label>일일 트래픽</label>
+        <input type="number" id="f_daily" placeholder="50">
+      </div>
+      <div class="form-group">
+        <label>경과 일수</label>
+        <input type="number" id="f_elapsed" placeholder="3">
+      </div>
+      <div class="form-group">
+        <label>총 트래픽</label>
+        <input type="number" id="f_total" placeholder="150">
+        <div class="field-hint">자동 계산 또는 직접 입력</div>
+      </div>
+    </div>
+
+    <div class="fields-grid-2">
+      <div class="form-group">
+        <label>상품번호 (자동추출)</label>
+        <input type="text" id="f_pid" placeholder="12345678" oninput="updatePreview()">
+        <div class="field-hint">I열: 앞 3자리 / K열: 앞 5자리</div>
+      </div>
+      <div class="form-group">
+        <label>업체명 (스토어 자동 조회)</label>
+        <input type="text" id="f_store" placeholder="도담산삼" oninput="updatePreview()">
+        <div class="field-hint" id="store-fetch-hint">URL 입력 시 실제 스토어명 자동 조회 (slug → 표시명)</div>
+      </div>
+    </div>
+
+    <div class="form-group" style="margin-bottom:0;">
+      <label>미션 설명 (J열) — 직접 편집 가능</label>
+      <textarea class="mission-edit" id="f_mission">미션 수행하며,
+리워드 즉시 적립 받으세요!
+
+1. 하단 [검색어 복사하기] 버튼을 클릭 하고, 키워드를 복사해주세요.
+2. [힌트 보기] 버튼을 클릭해서 네이버에 접속해주세요.
+3. 복사된 키워드를 검색 창에 붙여 넣고 검색해주세요.
+4. 아래 상품을 클릭 해주세요.
+
+{blurred_name}
+( '광고' 클릭 절대 금지 )
+
+▶판매처 : {store_name}
+
+5. 상세페이지 하단 구매 추가정보에서 상품번호 앞 5자리를
+아래 정답란에 입력 후 제출해주세요.</textarea>
+      <div class="field-hint">💡 {blurred_name}=블러처리 상품명, {store_name}=업체명 자동 삽입</div>
+    </div>
+  </div>
+
+  <!-- 생성 버튼 -->
+  <div style="text-align:center;margin-bottom:20px;">
+    <button class="btn btn-primary" style="padding:12px 36px;font-size:.95rem;" onclick="generateSheet()">
+      ✨ 구글 시트 데이터 생성
+    </button>
+  </div>
+
+  <!-- 결과 -->
+  <div id="result-section" class="result-section" style="display:none;">
+    <div class="result-header">
+      <div class="result-title">📊 생성된 시트 데이터 (행 3~7)</div>
+      <div style="display:flex;gap:8px;">
+        <button class="copy-btn" id="copy-btn" onclick="copyTSV()">
+          📋 클립보드 복사 (구글 시트용)
+        </button>
+      </div>
+    </div>
+
+    <div class="sheet-table-wrap">
+      <table class="sheet-table" id="sheet-table">
+        <thead>
+          <tr>
+            <th>행</th>
+            <th>B열</th>
+            <th>C열 (시작일)</th>
+            <th>D열 (종료일)</th>
+            <th>E열</th>
+            <th>F열</th>
+            <th>G열</th>
+            <th>H열</th>
+            <th>I열 (키워드힌트)</th>
+            <th>J열 (미션)</th>
+            <th>K열 (정답)</th>
+            <th>L열 (힌트URL)</th>
+            <th>M열 (업체)</th>
+            <th>N열 (수량)</th>
+          </tr>
+        </thead>
+        <tbody id="sheet-tbody">
+        </tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:16px;">
+      <div class="section-title">TSV (탭 구분) — 구글 시트에 직접 붙여넣기</div>
+      <div class="tsv-box" id="tsv-box"></div>
+    </div>
+
+    <div style="margin-top:12px;background:#f59e0b11;border:1px solid #f59e0b33;border-radius:8px;padding:14px;font-size:.8rem;color:#94a3b8;line-height:1.7;">
+      <strong style="color:#f59e0b;">⚠️ 구글 시트 붙여넣기 안내 (병합 한계)</strong><br>
+      📋 <strong>복사 방법:</strong> 위 [클립보드 복사] 버튼 → Google Sheets <strong>B3</strong> 셀 클릭 → Ctrl+V<br>
+      🔀 <strong>병합 셀 (수동 처리 필요):</strong> TSV 붙여넣기는 병합을 지원하지 않습니다.<br>
+      &nbsp;&nbsp;&nbsp;• <strong>C열 (시작일)</strong>: C3~C7 선택 → 병합<br>
+      &nbsp;&nbsp;&nbsp;• <strong>D열 (종료일)</strong>: D3~D7 선택 → 병합<br>
+      &nbsp;&nbsp;&nbsp;• <strong>N열 (수량)</strong>: N3~N7 선택 → 병합<br>
+      📌 <strong>E~H열 수식</strong>은 붙여넣기 전 이미 입력된 수식을 건드리지 마세요.
+    </div>
+  </div>
+</div>
+
+<!-- ════ 일괄처리 탭 ════ -->
+<div id="tab-bulk" class="tab-panel">
+  <div class="card">
+    <div style="text-align:center;padding:48px;color:#475569;">
+      <div style="font-size:2.5rem;margin-bottom:12px;">🔧</div>
+      <div style="font-size:1rem;font-weight:600;color:#64748b;">준비 중</div>
+      <div style="font-size:.85rem;margin-top:8px;">일괄 처리 기능은 곧 추가될 예정입니다.</div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_script %}
+<script>
+// ── 탭 전환 ──
+function switchAutoTab(tab) {
+  document.querySelectorAll('.auto-tab').forEach((el,i) => {
+    el.classList.toggle('active', ['reward','bulk'][i] === tab);
+  });
+  document.querySelectorAll('.tab-panel').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+}
+
+function switchScenario(n) {
+  document.getElementById('sc1-tab').classList.toggle('active', n===1);
+  document.getElementById('sc2-tab').classList.toggle('active', n===2);
+}
+
+// ── 주문서 파싱 ──
+function parseOrder() {
+  const text = document.getElementById('orderText').value;
+  const get = (patterns) => {
+    for (const p of patterns) {
+      const m = text.match(p);
+      if (m && m[1]) return m[1].trim();
+    }
+    return '';
+  };
+
+  const start   = get([/시작일\s*[:：]\s*([0-9\-\/]+)/,/start\s*[:：]\s*([0-9\-\/]+)/i]);
+  const end     = get([/종료일\s*[:：]\s*([0-9\-\/]+)/,/end\s*[:：]\s*([0-9\-\/]+)/i]);
+  const kw      = get([/키워드\s*[:：]\s*(.+)/,/keyword\s*[:：]\s*(.+)/i]);
+  const url     = get([/상품\s*URL\s*[:：]\s*(https?:\/\/\S+)/i,/URL\s*[:：]\s*(https?:\/\/\S+)/i]);
+  const name    = get([/상품명\s*[:：]\s*(.+)/,/product\s*name\s*[:：]\s*(.+)/i]);
+  const daily   = get([/일일\s*트래픽\s*[:：]\s*(\d+)/,/일일\s*[:：]\s*(\d+)/]);
+  const elapsed = get([/경과\s*일수\s*[:：]\s*(\d+)/,/경과\s*[:：]\s*(\d+)/]);
+  const total   = get([/총\s*트래픽\s*[:：]\s*(\d+)/,/총\s*[:：]\s*(\d+)/]);
+
+  if (start)   document.getElementById('f_start').value   = start;
+  if (end)     document.getElementById('f_end').value     = end;
+  if (kw)      document.getElementById('f_keyword').value = kw;
+  if (url) {
+    document.getElementById('f_url').value = url;
+    extractFromUrl();
+  }
+  if (name)    document.getElementById('f_name').value    = name;
+  if (daily)   document.getElementById('f_daily').value   = daily;
+  if (elapsed) document.getElementById('f_elapsed').value = elapsed;
+  if (total)   document.getElementById('f_total').value   = total;
+
+  // 파싱 결과 표시
+  const display = document.getElementById('parsed-display');
+  const fields = {시작일:start,종료일:end,키워드:kw,'상품URL':url?url.substring(0,40)+'...':'',상품명:name,일일트래픽:daily,경과일수:elapsed,총트래픽:total};
+  display.innerHTML = Object.entries(fields).filter(([k,v])=>v).map(([k,v])=>
+    `<div class="pf-badge">${k}<span>${v}</span></div>`
+  ).join('');
+  display.style.display = 'flex';
+}
+
+// ── URL에서 상품번호/업체명 추출 ──
+function extractFromUrl() {
+  const url = document.getElementById('f_url').value.trim();
+  if (!url) return;
+
+  // 상품번호 추출: /products/숫자 또는 ?itemId=숫자
+  let pid = '';
+  const m1 = url.match(/\/products\/(\d+)/);
+  const m2 = url.match(/[?&]itemId=(\d+)/);
+  const m3 = url.match(/catalog\/(\d+)/);
+  if (m1) pid = m1[1];
+  else if (m2) pid = m2[1];
+  else if (m3) pid = m3[1];
+
+  // 업체 slug 추출: smartstore.naver.com/slug
+  let storeSlug = '';
+  const ms = url.match(/smartstore\.naver\.com\/([^\/\?#]+)/);
+  const mf = url.match(/storefarm\.naver\.com\/([^\/\?#]+)/);
+  if (ms) storeSlug = ms[1];
+  else if (mf) storeSlug = mf[1];
+
+  if (pid) document.getElementById('f_pid').value = pid;
+
+  const hint = document.getElementById('url-extract-hint');
+  if (pid) {
+    hint.innerHTML = `✅ 상품번호: <strong style="color:#03c75a">${pid}</strong>`;
+    hint.style.color = '#03c75a';
+  } else {
+    hint.innerHTML = '⚠️ 상품번호를 찾지 못했습니다. 직접 입력해주세요.';
+    hint.style.color = '#ef4444';
+  }
+
+  // 스토어 실제 이름 자동 조회 (API)
+  if (storeSlug && storeSlug !== 'products') {
+    const storeInput = document.getElementById('f_store');
+    const storeHint  = document.getElementById('store-fetch-hint');
+    storeInput.value = storeSlug + ' (조회중...)';
+    storeHint.textContent = '🔄 스토어명 조회 중...';
+    storeHint.style.color = '#f59e0b';
+
+    fetch(`/api/fetch-store-name?slug=${encodeURIComponent(storeSlug)}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok && d.name) {
+          storeInput.value = d.name;
+          storeHint.innerHTML = `✅ 스토어명: <strong style="color:#03c75a">${d.name}</strong> (slug: ${storeSlug})`;
+          storeHint.style.color = '#03c75a';
+        } else {
+          storeInput.value = storeSlug;
+          storeHint.textContent = '⚠️ 자동 조회 실패 — slug로 대체. 직접 수정해주세요.';
+          storeHint.style.color = '#f59e0b';
+        }
+      })
+      .catch(() => {
+        storeInput.value = storeSlug;
+        storeHint.textContent = '⚠️ 조회 실패 — 직접 입력해주세요.';
+        storeHint.style.color = '#ef4444';
+      });
+  }
+
+  updatePreview();
+}
+
+// ── 상품명 블러 처리 ──
+function blurWord(w) {
+  if (w.length <= 1) return w;
+  if (w.length === 2) return '*' + w[1];
+  return w[0] + '*' + w.slice(2);
+}
+
+function blurProductName(name) {
+  if (!name) return '';
+  const words = name.split(/\s+/);
+  return words.map((w, i) => i === 0 ? w : blurWord(w)).join(' ');
+}
+
+// ── 자동 계산 ──
+document.getElementById('f_daily').addEventListener('input', autoCalc);
+document.getElementById('f_elapsed').addEventListener('input', autoCalc);
+function autoCalc() {
+  const d = parseInt(document.getElementById('f_daily').value) || 0;
+  const e = parseInt(document.getElementById('f_elapsed').value) || 0;
+  if (d && e) document.getElementById('f_total').value = d * e;
+}
+
+// ── 시트 데이터 생성 ──
+function generateSheet() {
+  const start   = document.getElementById('f_start').value.trim();
+  const end     = document.getElementById('f_end').value.trim();
+  const keyword = document.getElementById('f_keyword').value.trim();
+  const url     = document.getElementById('f_url').value.trim();
+  const name    = document.getElementById('f_name').value.trim();
+  const daily   = document.getElementById('f_daily').value.trim();
+  const pid     = document.getElementById('f_pid').value.trim();
+  const store   = document.getElementById('f_store').value.trim();
+  const missionTpl = document.getElementById('f_mission').value;
+
+  if (!start || !end) { alert('시작일과 종료일을 입력해주세요.'); return; }
+  if (!url)           { alert('상품 URL을 입력해주세요.'); return; }
+
+  // 미션 텍스트 완성
+  const blurred = blurProductName(name);
+  const mission = missionTpl
+    .replace(/\{keyword\}/g, keyword || '키워드')
+    .replace(/\{blurred_name\}/g, blurred || name)
+    .replace(/\{product_name\}/g, name)
+    .replace(/\{store_name\}/g, store || '판매처');
+
+  const pid3 = pid ? pid.substring(0, 3) : '';
+  const pid5 = pid ? pid.substring(0, 5) : '';
+
+  // 5행 데이터 구성
+  const rows = [];
+  for (let i = 0; i < 5; i++) {
+    rows.push({
+      row:     3 + i,
+      B:       'WEB',
+      C:       i === 0 ? start : '',       // 병합
+      D:       i === 0 ? end : '',         // 병합
+      E:       '',                         // 수식 (비움)
+      F:       '',
+      G:       '',
+      H:       '',
+      I:       pid3,
+      J:       mission,                    // 5행 모두 미션 채우기
+      K:       pid5,
+      L:       url,
+      M:       store,
+      N:       i === 0 ? daily : '',       // 병합
+    });
+  }
+
+  // 테이블 렌더링
+  const tbody = document.getElementById('sheet-tbody');
+  tbody.innerHTML = rows.map(r => {
+    const isMergedTop = r.C !== '' || r.row === 3;
+    return `<tr>
+      <td class="row-num">${r.row}</td>
+      <td class="col-web">${r.B}</td>
+      <td class="${r.C ? 'merged-top' : 'merged-mid'}">${r.C || '(병합)'}</td>
+      <td class="${r.D ? 'merged-top' : 'merged-mid'}">${r.D || '(병합)'}</td>
+      <td class="col-formula">수식</td>
+      <td class="col-formula">수식</td>
+      <td class="col-formula">수식</td>
+      <td class="col-formula">수식</td>
+      <td class="col-keyword">${r.I}</td>
+      <td class="editable" contenteditable="true" style="max-width:200px;white-space:pre-line;word-break:break-all;font-size:.72rem;line-height:1.4;">${r.J}</td>
+      <td>${r.K}</td>
+      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;"><a href="${r.L}" target="_blank" style="color:#3b82f6;">${r.L.substring(0,35)}...</a></td>
+      <td>${r.M}</td>
+      <td class="${r.N ? 'merged-top' : 'merged-mid'}">${r.N || '(병합)'}</td>
+    </tr>`;
+  }).join('');
+
+  // TSV 생성 (E~H는 공백, 구글 시트 수식은 수동 입력)
+  const tsv = rows.map(r => [r.B, r.C, r.D, '', '', '', '', r.I, r.J, r.K, r.L, r.M, r.N].join('\t')).join('\n');
+  document.getElementById('tsv-box').textContent = tsv;
+
+  // 결과 표시
+  document.getElementById('result-section').style.display = 'block';
+  document.getElementById('result-section').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+// ── TSV 복사 ──
+function copyTSV() {
+  const tsv = document.getElementById('tsv-box').textContent;
+  navigator.clipboard.writeText(tsv).then(() => {
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = '✅ 복사됨!';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.innerHTML = '📋 클립보드 복사 (구글 시트용)';
+      btn.classList.remove('copied');
+    }, 2000);
+  }).catch(() => {
+    // fallback
+    const el = document.createElement('textarea');
+    el.value = tsv;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+    alert('복사되었습니다!');
+  });
+}
+
+// ── 전체 초기화 ──
+function clearAll() {
+  ['f_start','f_end','f_keyword','f_url','f_name','f_daily','f_elapsed','f_total','f_pid','f_store']
+    .forEach(id => document.getElementById(id).value = '');
+  document.getElementById('orderText').value = '';
+  document.getElementById('parsed-display').style.display = 'none';
+  document.getElementById('result-section').style.display = 'none';
+  document.getElementById('url-extract-hint').textContent = 'URL 입력 시 상품번호/업체명 자동 추출';
+  document.getElementById('url-extract-hint').style.color = '';
+}
+
+// ── 프리뷰 자동 업데이트 ──
+function updatePreview() {}
+</script>
+{% endblock %}
