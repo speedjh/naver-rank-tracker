@@ -204,18 +204,30 @@
         <div class="field-hint">I열: 앞 3자리 / K열: 앞 5자리</div>
       </div>
       <div class="form-group">
-        <label>업체명 (자동추출)</label>
+        <label>업체명 (스토어 자동 조회)</label>
         <input type="text" id="f_store" placeholder="도담산삼" oninput="updatePreview()">
-        <div class="field-hint">M열 자동 입력</div>
+        <div class="field-hint" id="store-fetch-hint">URL 입력 시 실제 스토어명 자동 조회 (slug → 표시명)</div>
       </div>
     </div>
 
     <div class="form-group" style="margin-bottom:0;">
       <label>미션 설명 (J열) — 직접 편집 가능</label>
-      <textarea class="mission-edit" id="f_mission">네이버 쇼핑에서 "{keyword}"를 검색하세요.
-검색 결과에서 "{blurred_name}" 상품을 찾아보세요.
-상품번호 앞 5자리를 정답란에 입력해주세요!</textarea>
-      <div class="field-hint">키워드, 상품명 블러 처리 후 자동 삽입됨</div>
+      <textarea class="mission-edit" id="f_mission">미션 수행하며,
+리워드 즉시 적립 받으세요!
+
+1. 하단 [검색어 복사하기] 버튼을 클릭 하고, 키워드를 복사해주세요.
+2. [힌트 보기] 버튼을 클릭해서 네이버에 접속해주세요.
+3. 복사된 키워드를 검색 창에 붙여 넣고 검색해주세요.
+4. 아래 상품을 클릭 해주세요.
+
+{blurred_name}
+( '광고' 클릭 절대 금지 )
+
+▶판매처 : {store_name}
+
+5. 상세페이지 하단 구매 추가정보에서 상품번호 앞 5자리를
+아래 정답란에 입력 후 제출해주세요.</textarea>
+      <div class="field-hint">💡 {blurred_name}=블러처리 상품명, {store_name}=업체명 자동 삽입</div>
     </div>
   </div>
 
@@ -267,8 +279,14 @@
       <div class="tsv-box" id="tsv-box"></div>
     </div>
 
-    <div style="margin-top:12px;font-size:.78rem;color:#475569;">
-      💡 복사 후 Google Sheets의 B3 셀을 클릭하고 Ctrl+V(또는 Cmd+V)로 붙여넣으세요. C, D, N 열은 직접 셀 병합 처리가 필요합니다.
+    <div style="margin-top:12px;background:#f59e0b11;border:1px solid #f59e0b33;border-radius:8px;padding:14px;font-size:.8rem;color:#94a3b8;line-height:1.7;">
+      <strong style="color:#f59e0b;">⚠️ 구글 시트 붙여넣기 안내 (병합 한계)</strong><br>
+      📋 <strong>복사 방법:</strong> 위 [클립보드 복사] 버튼 → Google Sheets <strong>B3</strong> 셀 클릭 → Ctrl+V<br>
+      🔀 <strong>병합 셀 (수동 처리 필요):</strong> TSV 붙여넣기는 병합을 지원하지 않습니다.<br>
+      &nbsp;&nbsp;&nbsp;• <strong>C열 (시작일)</strong>: C3~C7 선택 → 병합<br>
+      &nbsp;&nbsp;&nbsp;• <strong>D열 (종료일)</strong>: D3~D7 선택 → 병합<br>
+      &nbsp;&nbsp;&nbsp;• <strong>N열 (수량)</strong>: N3~N7 선택 → 병합<br>
+      📌 <strong>E~H열 수식</strong>은 붙여넣기 전 이미 입력된 수식을 건드리지 마세요.
     </div>
   </div>
 </div>
@@ -357,19 +375,51 @@ function extractFromUrl() {
   else if (m2) pid = m2[1];
   else if (m3) pid = m3[1];
 
-  // 업체명 추출: smartstore.naver.com/업체명 또는 storefarm
-  let store = '';
+  // 업체 slug 추출: smartstore.naver.com/slug
+  let storeSlug = '';
   const ms = url.match(/smartstore\.naver\.com\/([^\/\?#]+)/);
   const mf = url.match(/storefarm\.naver\.com\/([^\/\?#]+)/);
-  if (ms) store = ms[1];
-  else if (mf) store = mf[1];
+  if (ms) storeSlug = ms[1];
+  else if (mf) storeSlug = mf[1];
 
   if (pid) document.getElementById('f_pid').value = pid;
-  if (store) document.getElementById('f_store').value = store;
 
   const hint = document.getElementById('url-extract-hint');
-  hint.innerHTML = pid ? `✅ 상품번호: <strong style="color:#03c75a">${pid}</strong>` + (store ? ` | 업체: <strong style="color:#3b82f6">${store}</strong>` : '') : '상품번호를 찾지 못했습니다. 직접 입력해주세요.';
-  hint.style.color = pid ? '#03c75a' : '#ef4444';
+  if (pid) {
+    hint.innerHTML = `✅ 상품번호: <strong style="color:#03c75a">${pid}</strong>`;
+    hint.style.color = '#03c75a';
+  } else {
+    hint.innerHTML = '⚠️ 상품번호를 찾지 못했습니다. 직접 입력해주세요.';
+    hint.style.color = '#ef4444';
+  }
+
+  // 스토어 실제 이름 자동 조회 (API)
+  if (storeSlug && storeSlug !== 'products') {
+    const storeInput = document.getElementById('f_store');
+    const storeHint  = document.getElementById('store-fetch-hint');
+    storeInput.value = storeSlug + ' (조회중...)';
+    storeHint.textContent = '🔄 스토어명 조회 중...';
+    storeHint.style.color = '#f59e0b';
+
+    fetch(`/api/fetch-store-name?slug=${encodeURIComponent(storeSlug)}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok && d.name) {
+          storeInput.value = d.name;
+          storeHint.innerHTML = `✅ 스토어명: <strong style="color:#03c75a">${d.name}</strong> (slug: ${storeSlug})`;
+          storeHint.style.color = '#03c75a';
+        } else {
+          storeInput.value = storeSlug;
+          storeHint.textContent = '⚠️ 자동 조회 실패 — slug로 대체. 직접 수정해주세요.';
+          storeHint.style.color = '#f59e0b';
+        }
+      })
+      .catch(() => {
+        storeInput.value = storeSlug;
+        storeHint.textContent = '⚠️ 조회 실패 — 직접 입력해주세요.';
+        storeHint.style.color = '#ef4444';
+      });
+  }
 
   updatePreview();
 }
@@ -416,7 +466,8 @@ function generateSheet() {
   const mission = missionTpl
     .replace(/\{keyword\}/g, keyword || '키워드')
     .replace(/\{blurred_name\}/g, blurred || name)
-    .replace(/\{product_name\}/g, name);
+    .replace(/\{product_name\}/g, name)
+    .replace(/\{store_name\}/g, store || '판매처');
 
   const pid3 = pid ? pid.substring(0, 3) : '';
   const pid5 = pid ? pid.substring(0, 5) : '';
@@ -434,7 +485,7 @@ function generateSheet() {
       G:       '',
       H:       '',
       I:       pid3,
-      J:       i === 0 ? mission : '',     // 첫 행만 미션
+      J:       mission,                    // 5행 모두 미션 채우기
       K:       pid5,
       L:       url,
       M:       store,
@@ -456,7 +507,7 @@ function generateSheet() {
       <td class="col-formula">수식</td>
       <td class="col-formula">수식</td>
       <td class="col-keyword">${r.I}</td>
-      <td class="editable" contenteditable="true" style="max-width:250px;white-space:normal;word-break:break-all;">${r.J}</td>
+      <td class="editable" contenteditable="true" style="max-width:200px;white-space:pre-line;word-break:break-all;font-size:.72rem;line-height:1.4;">${r.J}</td>
       <td>${r.K}</td>
       <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;"><a href="${r.L}" target="_blank" style="color:#3b82f6;">${r.L.substring(0,35)}...</a></td>
       <td>${r.M}</td>
