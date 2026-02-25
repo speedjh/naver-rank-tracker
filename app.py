@@ -1,36 +1,735 @@
-{% extends "base.html" %}
-{% block title %}API 설정 - 네이버 순위 트래커{% endblock %}
-{% block content %}
+"""
+Flask 웹 애플리케이션 v6 - 다중 광고주 탭 UI
+- 광고주별 탭 전환 (클라이언트 사이드)
+- 각 광고주마다 독립된 상품/키워드/순위 관리
+- 모든 버튼 AJAX 동작
+- 매일 오전 11시 자동 순위 추적
+"""
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+import threading, logging, os, re
+from datetime import datetime
+from db import init_db, get_conn
+from engine import parse_product_info, track_client, search_shopping
 
-<div class="page-header">
-  <div class="page-title">⚙️ 네이버 API 설정</div>
-  <div class="page-sub">네이버 개발자 센터에서 발급받은 키를 입력하세요</div>
-</div>
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import pytz
 
-<div class="card" style="max-width:560px;">
-  <div class="card-title">🔑 API 키 입력</div>
-  <form action="/settings" method="post">
-    <div style="margin-bottom:16px;">
-      <label>Client ID *</label>
-      <input type="text" name="client_id" value="{{ client_id }}" placeholder="Bl99m0KRtTXmQds2_i5e" required>
-    </div>
-    <div style="margin-bottom:20px;">
-      <label>Client Secret *</label>
-      <input type="password" name="client_secret" value="{{ client_secret }}" placeholder="mXDQnlETgk" required>
-    </div>
-    <button type="submit" class="btn btn-primary">💾 저장</button>
-  </form>
-</div>
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
 
-<div class="card" style="max-width:560px;background:#1a2535;border:1px solid #2d3f5a;">
-  <div class="card-title" style="color:#3b82f6;">ℹ️ API 발급 방법</div>
-  <ol style="padding-left:20px;line-height:2;font-size:.875rem;color:#94a3b8;">
-    <li><a href="https://developers.naver.com" target="_blank" style="color:#03c75a;">developers.naver.com</a> 접속</li>
-    <li>로그인 → <strong style="color:#e2e8f0;">Application → 애플리케이션 등록</strong></li>
-    <li>사용 API에서 <strong style="color:#e2e8f0;">"검색" 선택</strong></li>
-    <li>등록 후 <strong style="color:#e2e8f0;">Client ID / Client Secret</strong> 복사</li>
-    <li>하루 <strong style="color:#f59e0b;">25,000회</strong> 무료 호출 가능</li>
-  </ol>
-</div>
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "naver_rank_agency_2025")
 
-{% endblock %}
+tracking_status = {}
+global_tracking = {"running": False, "last_run": None}
+
+# ────────────────────────────────────────────
+# 공통 헬퍼
+# ────────────────────────────────────────────
+def get_api_keys():
+    env_id     = os.environ.get("NAVER_CLIENT_ID", "")
+    env_secret = os.environ.get("NAVER_CLIENT_SECRET", "")
+    if env_id and env_secret:
+        return env_id, env_secret
+    conn = get_conn()
+    rows = {r["key"]: r["value"] for r in
+            conn.execute("SELECT key,value FROM settings WHERE key IN ('client_id','client_secret')").fetchall()}
+    conn.close()
+    return rows.get("client_id", ""), rows.get("client_secret", "")
+
+
+def get_client_data(cid):
+    """광고주 한 명의 rows(상품×키워드), products, keywords 반환"""
+    conn = get_conn()
+    c    = conn.cursor()
+
+    # 상품 × 키워드 조합 + 최신 순위
+    c.execute("""
+        SELECT
+            p.id          AS pid,
+            p.product_id  AS product_id,
+            p.product_name AS product_name,
+            p.product_url  AS product_url,
+            k.id           AS kid,
+            k.keyword      AS keyword,
+            rh.rank        AS rank,
+            rh.lprice      AS lprice,
+            rh.checked_at  AS checked_at
+        FROM products p
+        CROSS JOIN keywords k ON k.client_id = p.client_id
+        LEFT JOIN rank_history rh ON (
+            rh.product_id = p.product_id
+            AND rh.client_id  = p.client_id
+            AND rh.keyword    = k.keyword
+            AND rh.id = (
+                SELECT MAX(id) FROM rank_history
+                WHERE product_id = p.product_id
+                  AND client_id  = p.client_id
+                  AND keyword    = k.keyword
+            )
+        )
+        WHERE p.client_id=?
+        ORDER BY p.id, k.id
+    """, (cid,))
+    combo_rows = [dict(r) for r in c.fetchall()]
+
+    # 키워드 없는 상품 단독
+    c.execute("""
+        SELECT p.id AS pid, p.product_id, p.product_name, p.product_url
+        FROM products p
+        WHERE p.client_id=? AND NOT EXISTS (
+            SELECT 1 FROM keywords k WHERE k.client_id=?
+        )
+    """, (cid, cid))
+    for sp in c.fetchall():
+        combo_rows.append({
+            "pid": sp["pid"], "product_id": sp["product_id"],
+            "product_name": sp["product_name"], "product_url": sp["product_url"],
+            "kid": None, "keyword": "—",
+            "rank": None, "lprice": None, "checked_at": None,
+        })
+
+    c.execute("SELECT id, keyword FROM keywords WHERE client_id=? ORDER BY id", (cid,))
+    keywords = [dict(r) for r in c.fetchall()]
+
+    c.execute("SELECT id, product_id, product_name, product_url FROM products WHERE client_id=? ORDER BY id", (cid,))
+    products = [dict(r) for r in c.fetchall()]
+
+    conn.close()
+    return combo_rows, products, keywords
+
+
+# ────────────────────────────────────────────
+# 전체 추적
+# ────────────────────────────────────────────
+def run_all_tracking(source="manual"):
+    if global_tracking["running"]:
+        return
+    api_id, api_secret = get_api_keys()
+    if not api_id:
+        logger.warning("[추적] API 키 미설정")
+        return
+
+    conn = get_conn()
+    clients = conn.execute("SELECT id,name FROM clients").fetchall()
+    conn.close()
+    if not clients:
+        return
+
+    global_tracking["running"] = True
+    logger.info(f"[추적 시작] {source} | {len(clients)}개 광고주")
+    try:
+        for cl in clients:
+            cid = cl["id"]
+            conn2 = get_conn()
+            prods = [dict(r) for r in conn2.execute(
+                "SELECT product_id,catalog_id,url_product_id,mall_name,product_name FROM products WHERE client_id=?", (cid,)
+            ).fetchall()]
+            kws = [r["keyword"] for r in conn2.execute(
+                "SELECT keyword FROM keywords WHERE client_id=?", (cid,)
+            ).fetchall()]
+            conn2.close()
+            if not prods or not kws:
+                continue
+            tracking_status[cid] = "running"
+            try:
+                results = track_client(api_id, api_secret, cid, prods, kws, max_pages=10)
+                conn3 = get_conn()
+                for r in results:
+                    conn3.execute("""
+                        INSERT INTO rank_history
+                        (client_id,product_id,product_name,keyword,rank,
+                         lprice,mall_name,product_type,matched_id,checked_at)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """, (r["client_id"], r["product_id"], r["product_name"],
+                          r["keyword"], r["rank"], r.get("lprice"), r.get("mall_name"),
+                          r.get("product_type"), r.get("matched_id"), r["checked_at"]))
+                conn3.commit()
+                conn3.close()
+                tracking_status[cid] = "done"
+                logger.info(f"  ✅ {cl['name']} 완료 ({len(results)}건)")
+            except Exception as e:
+                tracking_status[cid] = f"error:{e}"
+                logger.error(f"  ❌ {cl['name']} 오류: {e}")
+        global_tracking["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    finally:
+        global_tracking["running"] = False
+
+
+def scheduled_job():
+    logger.info("⏰ 자동 스케줄 실행")
+    threading.Thread(target=lambda: run_all_tracking("schedule"), daemon=True).start()
+
+
+# ────────────────────────────────────────────
+# APScheduler
+# ────────────────────────────────────────────
+KST = pytz.timezone("Asia/Seoul")
+scheduler = BackgroundScheduler(timezone=KST)
+scheduler.add_job(scheduled_job, CronTrigger(hour=11, minute=0, timezone=KST),
+                  id="daily_track", replace_existing=True)
+scheduler.start()
+logger.info("⏰ 스케줄러 시작 — 매일 KST 11:00")
+
+
+# ════════════════════════════════════════════
+# 메인 대시보드
+# ════════════════════════════════════════════
+@app.route("/")
+def index():
+    conn = get_conn()
+    clients = [dict(r) for r in conn.execute("SELECT id,name,memo FROM clients ORDER BY id").fetchall()]
+    conn.close()
+
+    # 광고주가 하나도 없으면 빈 상태로 시작 (자동 생성 X)
+    client_data = {}
+    for cl in clients:
+        rows, products, keywords = get_client_data(cl["id"])
+        client_data[cl["id"]] = {
+            "rows": rows,
+            "products": products,
+            "keywords": keywords,
+        }
+
+    job = scheduler.get_job("daily_track")
+    next_run = job.next_run_time.astimezone(KST).strftime("%m/%d %H:%M") if job and job.next_run_time else "-"
+
+    return render_template("index.html",
+                           clients=clients,
+                           client_data=client_data,
+                           global_tracking=global_tracking,
+                           next_run=next_run)
+
+
+# ════════════════════════════════════════════
+# 광고주 CRUD (AJAX)
+# ════════════════════════════════════════════
+@app.route("/clients/add", methods=["POST"])
+def add_client():
+    name = (request.form.get("name") or request.json.get("name", "") if request.is_json else request.form.get("name","")).strip()
+    if not name:
+        return jsonify({"error": "광고주명을 입력하세요."}), 400
+    conn = get_conn()
+    try:
+        conn.execute("INSERT INTO clients (name, memo) VALUES (?,?)", (name, ""))
+        conn.commit()
+        cid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    except Exception as e:
+        conn.close()
+        return jsonify({"error": str(e)}), 500
+    conn.close()
+    return jsonify({"ok": True, "id": cid, "name": name})
+
+
+@app.route("/clients/<int:cid>/delete", methods=["POST"])
+def delete_client(cid):
+    conn = get_conn()
+    conn.execute("DELETE FROM rank_history WHERE client_id=?", (cid,))
+    conn.execute("DELETE FROM keywords WHERE client_id=?", (cid,))
+    conn.execute("DELETE FROM products WHERE client_id=?", (cid,))
+    conn.execute("DELETE FROM clients WHERE id=?", (cid,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+# ════════════════════════════════════════════
+# 상품 CRUD (AJAX)
+# ════════════════════════════════════════════
+@app.route("/clients/<int:cid>/products/add", methods=["POST"])
+def add_product(cid):
+    product_url  = request.form.get("product_url", "").strip()
+    product_name = request.form.get("product_name", "").strip()
+    if not product_url:
+        return jsonify({"error": "URL을 입력하세요."}), 400
+
+    # 클라이언트 존재 확인
+    conn = get_conn()
+    if not conn.execute("SELECT id FROM clients WHERE id=?", (cid,)).fetchone():
+        conn.close()
+        return jsonify({"error": "존재하지 않는 광고주입니다."}), 404
+
+    info           = parse_product_info(product_url)
+    product_id     = info.get("product_id", "") or product_url
+    catalog_id     = info.get("catalog_id", "")
+    url_product_id = info.get("product_id", "")
+    display_name   = product_name or product_id
+
+    try:
+        conn.execute("""
+            INSERT OR IGNORE INTO products
+            (client_id,product_url,product_id,catalog_id,url_product_id,mall_name,product_name)
+            VALUES (?,?,?,?,?,?,?)
+        """, (cid, product_url, product_id, catalog_id, url_product_id, "", display_name))
+        conn.commit()
+        pid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    except Exception as e:
+        conn.close()
+        return jsonify({"error": str(e)}), 500
+    conn.close()
+    return jsonify({"ok": True, "pid": pid, "product_id": product_id, "product_name": display_name, "product_url": product_url})
+
+
+@app.route("/clients/<int:cid>/products/<int:pid>/delete", methods=["POST"])
+def delete_product(cid, pid):
+    conn = get_conn()
+    conn.execute("DELETE FROM products WHERE id=? AND client_id=?", (pid, cid))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+# ════════════════════════════════════════════
+# 키워드 CRUD (AJAX)
+# ════════════════════════════════════════════
+@app.route("/clients/<int:cid>/keywords/add", methods=["POST"])
+def add_keyword(cid):
+    raw = request.form.get("keyword", "").strip()
+    if not raw:
+        return jsonify({"error": "키워드를 입력하세요."}), 400
+
+    conn = get_conn()
+    if not conn.execute("SELECT id FROM clients WHERE id=?", (cid,)).fetchone():
+        conn.close()
+        return jsonify({"error": "존재하지 않는 광고주입니다."}), 404
+
+    kws = [k.strip() for k in re.split(r"[,\n]+", raw) if k.strip()]
+    added = []
+    for kw in kws:
+        try:
+            conn.execute("INSERT OR IGNORE INTO keywords (client_id,keyword) VALUES (?,?)", (cid, kw))
+            added.append(kw)
+        except Exception:
+            pass
+    conn.commit()
+
+    # 추가된 keyword id 목록
+    kid_map = {}
+    for kw in added:
+        row = conn.execute("SELECT id FROM keywords WHERE client_id=? AND keyword=?", (cid, kw)).fetchone()
+        if row:
+            kid_map[kw] = row["id"]
+    conn.close()
+    return jsonify({"ok": True, "added": added, "kid_map": kid_map})
+
+
+@app.route("/clients/<int:cid>/keywords/<int:kid>/delete", methods=["POST"])
+def delete_keyword(cid, kid):
+    conn = get_conn()
+    conn.execute("DELETE FROM keywords WHERE id=? AND client_id=?", (kid, cid))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+# ════════════════════════════════════════════
+# 추적
+# ════════════════════════════════════════════
+@app.route("/track/now", methods=["POST"])
+def track_now():
+    if global_tracking["running"]:
+        return jsonify({"error": "이미 추적 중입니다."}), 409
+    threading.Thread(target=lambda: run_all_tracking("manual"), daemon=True).start()
+    return jsonify({"ok": True, "message": "추적을 시작했습니다."})
+
+
+@app.route("/track/status")
+def track_status():
+    return jsonify({"running": global_tracking["running"], "last_run": global_tracking["last_run"]})
+
+
+# ════════════════════════════════════════════
+# 상품 검색 API
+# ════════════════════════════════════════════
+@app.route("/api/search-products")
+def api_search_products():
+    q    = request.args.get("q", "").strip()
+    page = int(request.args.get("page", 1))
+    if not q:
+        return jsonify({"error": "검색어를 입력하세요."})
+    api_id, api_secret = get_api_keys()
+    if not api_id:
+        return jsonify({"error": "Naver API 키를 먼저 설정해주세요."})
+    try:
+        start    = (page - 1) * 20 + 1
+        data     = search_shopping(api_id, api_secret, q, display=20, start=start)
+        items_raw = data.get("items", [])
+        total     = data.get("total", 0)
+        items = []
+        for i, item in enumerate(items_raw):
+            pid    = item.get("productId", "")
+            ptype  = str(item.get("productType", "2"))
+            is_cat = ptype == "1"
+            link   = item.get("link", "")
+            items.append({
+                "rank":      start + i,
+                "productId": pid,
+                "title":     re.sub(r"<[^>]+>", "", item.get("title", "")),
+                "mallName":  item.get("mallName", ""),
+                "lprice":    int(item.get("lprice", 0) or 0),
+                "image":     item.get("image", ""),
+                "isCatalog": is_cat,
+                "link":      link,
+                "addUrl":    f"https://search.shopping.naver.com/catalog/{pid}" if is_cat else link,
+            })
+        return jsonify({"items": items, "total": total})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+# ════════════════════════════════════════════
+# 히스토리 API
+# ════════════════════════════════════════════
+@app.route("/api/history")
+def api_history():
+    product_id = request.args.get("pid", "")
+    keyword    = request.args.get("kw", "")
+    conn = get_conn()
+    rows = [{"rank": r["rank"], "date": r["checked_at"][:16]} for r in conn.execute("""
+        SELECT rank, checked_at FROM rank_history
+        WHERE product_id=? AND keyword=?
+          AND checked_at >= datetime('now','-30 days','localtime')
+        ORDER BY checked_at ASC LIMIT 60
+    """, (product_id, keyword)).fetchall()]
+    conn.close()
+    return jsonify(rows)
+
+
+# ════════════════════════════════════════════
+# 설정
+# ════════════════════════════════════════════
+@app.route("/settings", methods=["GET", "POST"])
+def settings():
+    if request.method == "POST":
+        cid    = request.form.get("client_id", "").strip()
+        secret = request.form.get("client_secret", "").strip()
+        conn   = get_conn()
+        conn.execute("INSERT OR REPLACE INTO settings (key,value) VALUES ('client_id',?)", (cid,))
+        conn.execute("INSERT OR REPLACE INTO settings (key,value) VALUES ('client_secret',?)", (secret,))
+        conn.commit()
+        conn.close()
+        flash("API 키가 저장되었습니다.", "success")
+        return redirect(url_for("settings"))
+    api_id, api_secret = get_api_keys()
+    return render_template("settings.html", client_id=api_id, client_secret=api_secret)
+
+
+# ════════════════════════════════════════════
+# 업무 자동화 페이지
+# ════════════════════════════════════════════
+@app.route("/automation")
+def automation():
+    return render_template("automation.html")
+
+
+@app.route("/api/fetch-store-name")
+def api_fetch_store_name():
+    """네이버 스마트스토어 slug에서 실제 스토어 표시명 조회"""
+    import requests as req
+    slug = request.args.get("slug", "").strip()
+    if not slug:
+        return jsonify({"ok": False, "name": "", "error": "slug 없음"})
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+    }
+    try:
+        # 1) 프로필 페이지 파싱
+        profile_url = f"https://smartstore.naver.com/{slug}/profile"
+        resp = req.get(profile_url, headers=headers, timeout=6)
+        html = resp.text
+
+        # og:title 우선 ("\uc2a4토어명 : \ub124이버 스마트스토어" 형식)
+        m_og = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html)
+        if not m_og:
+            m_og = re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']', html)
+
+        # <title> 태그 파싱
+        m_title = re.search(r'<title[^>]*>([^<]+)</title>', html)
+
+        # JSON-LD 파싱 ("name": "...")
+        m_json = re.search(r'"name"\s*:\s*"([^"]+)"', html)
+
+        name = ""
+        if m_og:
+            raw = m_og.group(1).strip()
+            # "스토어명 : 네이버 스마트스토어" → 스토어명만
+            name = raw.split(':')[0].strip() if ':' in raw else raw
+        elif m_title:
+            raw = m_title.group(1).strip()
+            name = raw.split(':')[0].strip() if ':' in raw else raw
+        elif m_json:
+            name = m_json.group(1).strip()
+
+        # 스토어명이 너무 길거나 이상하면 slug 사용
+        if not name or len(name) > 30:
+            name = slug
+
+        logger.info(f"[StoreNameFetch] slug={slug} -> name={name}")
+        return jsonify({"ok": True, "name": name, "slug": slug})
+
+    except Exception as e:
+        logger.warning(f"[StoreNameFetch] slug={slug} 실패: {e}")
+        return jsonify({"ok": False, "name": slug, "error": str(e)})
+
+
+@app.route("/api/automation/generate", methods=["POST"])
+def api_automation_generate():
+    """리워드 마케팅 캠페인 구글 시트 데이터 생성 API"""
+    data = request.get_json(force=True)
+    start   = data.get("start", "").strip()
+    end     = data.get("end", "").strip()
+    keyword = data.get("keyword", "").strip()
+    url     = data.get("url", "").strip()
+    name    = data.get("name", "").strip()
+    daily   = data.get("daily", "").strip()
+    pid     = data.get("pid", "").strip()
+    store   = data.get("store", "").strip()
+    mission = data.get("mission", "").strip()
+
+    def blur_word(w):
+        if len(w) <= 1: return w
+        if len(w) == 2: return '*' + w[1]
+        return w[0] + '*' + w[2:]
+
+    def blur_name(n):
+        words = n.split()
+        return ' '.join([words[0]] + [blur_word(w) for w in words[1:]]) if words else n
+
+    blurred = blur_name(name)
+    mission_text = (mission
+        .replace("{keyword}", keyword or "키워드")
+        .replace("{blurred_name}", blurred or name)
+        .replace("{product_name}", name)
+        .replace("{store_name}", store or "판매처"))
+
+    pid3 = pid[:3] if pid else ""
+    pid5 = pid[:5] if pid else ""
+
+    rows = []
+    for i in range(5):
+        rows.append({
+            "row": 3 + i,
+            "B": "WEB",
+            "C": start if i == 0 else "",
+            "D": end   if i == 0 else "",
+            "E": "", "F": "", "G": "", "H": "",
+            "I": pid3,
+            "J": mission_text,   # 5행 모두 미션 채우기
+            "K": pid5,
+            "L": url,
+            "M": store,
+            "N": daily if i == 0 else "",
+        })
+
+    tsv = "\n".join(
+        "\t".join([r["B"],r["C"],r["D"],"","","","",r["I"],r["J"],r["K"],r["L"],r["M"],r["N"]])
+        for r in rows
+    )
+    return jsonify({"ok": True, "rows": rows, "tsv": tsv, "blurred_name": blurred})
+
+
+# ════════════════════════════════════════════
+# Excel 내보내기 API
+# ════════════════════════════════════════════
+@app.route("/api/automation/excel-export", methods=["POST"])
+def api_excel_export():
+    """캠페인 데이터를 .xlsx 파일로 내보내기 (병합 셀 포함)"""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from io import BytesIO
+
+    data = request.get_json(force=True)
+    campaigns = data.get("campaigns", [])
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "리워드캠페인"
+
+    # 헤더 스타일
+    hdr_fill = PatternFill("solid", fgColor="1E293B")
+    hdr_font = Font(color="94A3B8", bold=True, size=9)
+    hdr_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # 열 헤더 (B=2 ~ N=14)
+    COL_HDR = {
+        2:"WEB", 3:"시작일", 4:"종료일",
+        5:"E", 6:"F", 7:"G", 8:"H",
+        9:"키워드힌트", 10:"미션", 11:"정답",
+        12:"힌트URL", 13:"업체명", 14:"수량"
+    }
+    for col, title in COL_HDR.items():
+        cell = ws.cell(row=1, column=col, value=title)
+        cell.fill = hdr_fill
+        cell.font = hdr_font
+        cell.alignment = hdr_align
+
+    # 열 너비
+    ws.column_dimensions[get_column_letter(2)].width  = 8
+    ws.column_dimensions[get_column_letter(3)].width  = 12
+    ws.column_dimensions[get_column_letter(4)].width  = 12
+    for c in range(5, 9):  ws.column_dimensions[get_column_letter(c)].width = 10
+    ws.column_dimensions[get_column_letter(9)].width  = 10
+    ws.column_dimensions[get_column_letter(10)].width = 40
+    ws.column_dimensions[get_column_letter(11)].width = 12
+    ws.column_dimensions[get_column_letter(12)].width = 35
+    ws.column_dimensions[get_column_letter(13)].width = 16
+    ws.column_dimensions[get_column_letter(14)].width = 10
+
+    # 셀 스타일 함수
+    def cell_fill(color): return PatternFill("solid", fgColor=color)
+    def thin_border():
+        s = Side(border_style="thin", color="253048")
+        return Border(left=s, right=s, top=s, bottom=s)
+
+    row_num = 3  # 데이터 시작 행
+    for camp in campaigns:
+        rows_data = camp.get("rows", [])
+        camp_start_row = row_num
+        for ri, rd in enumerate(rows_data):
+            # rd = [행번호(skip), B, C, D, E, F, G, H, I, J, K, L, M, N]
+            # 인덱스:    0        1   2   3   4   5   6   7   8   9  10  11  12  13
+            for col_idx, col_excel in enumerate(range(2, 15)):  # B(2)~N(14)
+                val = rd[col_idx + 1] if col_idx + 1 < len(rd) else ""
+                if val == "__merge__":
+                    val = ""
+                c = ws.cell(row=row_num, column=col_excel, value=val)
+                c.border = thin_border()
+                c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                # 열별 색상
+                if col_excel == 2:  # B: WEB
+                    c.font = Font(color="F59E0B", bold=True, size=9)
+                    c.fill = cell_fill("0D1220")
+                elif col_excel in (3, 4):  # C, D: 날짜
+                    c.font = Font(color="03C75A", bold=True, size=9)
+                    c.fill = cell_fill("0D1A0D")
+                elif col_excel in (5, 6, 7, 8):  # E-H: 수식
+                    c.fill = cell_fill("0D1220")
+                    c.font = Font(color="334155", size=9)
+                elif col_excel == 9:  # I: 키워드
+                    c.font = Font(color="3B82F6", bold=True, size=9)
+                    c.fill = cell_fill("0D1220")
+                elif col_excel == 10:  # J: 미션
+                    c.font = Font(size=8)
+                    c.fill = cell_fill("0F172A")
+                    c.alignment = Alignment(wrap_text=True, vertical="top")
+                elif col_excel == 11:  # K: 정답
+                    c.font = Font(size=9)
+                    c.fill = cell_fill("0D1220")
+                elif col_excel == 12:  # L: URL
+                    c.font = Font(color="3B82F6", size=8)
+                    c.fill = cell_fill("0D1220")
+                elif col_excel == 13:  # M: 업체
+                    c.font = Font(color="A78BFA", bold=True, size=9)
+                    c.fill = cell_fill("0D1220")
+                elif col_excel == 14:  # N: 수량
+                    c.font = Font(color="03C75A", bold=True, size=9)
+                    c.fill = cell_fill("0D1A0D")
+            ws.row_dimensions[row_num].height = 18
+            row_num += 1
+
+        # 병합: C열(3), D열(4), N열(14) → camp_start_row ~ camp_start_row+4
+        end_row = camp_start_row + 4
+        ws.merge_cells(start_row=camp_start_row, start_column=3,
+                       end_row=end_row,          end_column=3)
+        ws.merge_cells(start_row=camp_start_row, start_column=4,
+                       end_row=end_row,          end_column=4)
+        ws.merge_cells(start_row=camp_start_row, start_column=14,
+                       end_row=end_row,          end_column=14)
+        # 미션 행 높이
+        for r in range(camp_start_row, end_row + 1):
+            ws.row_dimensions[r].height = 60
+
+        row_num += 1  # 캠페인 사이 빈 행
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.read(), 200, {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": "attachment; filename=campaign.xlsx"
+    }
+
+
+@app.route("/api/automation/excel-fill", methods=["POST"])
+def api_excel_fill():
+    """기존 XLSX 파일에 캠페인 데이터를 채워서 반환"""
+    import openpyxl
+    from openpyxl.styles import Alignment
+    from io import BytesIO
+
+    file    = request.files.get("file")
+    payload = request.form.get("payload", "{}")
+    start_row = int(request.form.get("start_row", 3))
+    start_col_letter = request.form.get("start_col", "B").upper().strip()
+
+    if not file:
+        return jsonify({"ok": False, "error": "파일 없음"}), 400
+
+    import json as _json
+    data = _json.loads(payload)
+    campaigns = data.get("campaigns", [])
+
+    wb = openpyxl.load_workbook(BytesIO(file.read()))
+    ws = wb.active
+
+    # 시작 열 번호 계산
+    from openpyxl.utils import column_index_from_string
+    start_col_idx = column_index_from_string(start_col_letter)
+
+    row_num = start_row
+    for camp in campaigns:
+        rows_data = camp.get("rows", [])
+        camp_start_row = row_num
+        for ri, rd in enumerate(rows_data):
+            for col_offset, val in enumerate(rd[1:]):  # rd[0] = 행번호 skip
+                if val == "__merge__":
+                    val = ""
+                cell = ws.cell(row=row_num, column=start_col_idx + col_offset, value=val)
+                cell.alignment = Alignment(wrap_text=True, vertical="center")
+            row_num += 1
+
+        # 병합 셀 처리
+        c_col = start_col_idx + 1  # C열
+        d_col = start_col_idx + 2  # D열
+        n_col = start_col_idx + 12  # N열
+        end_row = camp_start_row + 4
+        try:
+            ws.merge_cells(start_row=camp_start_row, start_column=c_col,
+                           end_row=end_row, end_column=c_col)
+            ws.merge_cells(start_row=camp_start_row, start_column=d_col,
+                           end_row=end_row, end_column=d_col)
+            ws.merge_cells(start_row=camp_start_row, start_column=n_col,
+                           end_row=end_row, end_column=n_col)
+        except Exception:
+            pass
+        row_num += 1  # 빈 행
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.read(), 200, {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": f"attachment; filename=filled_{file.filename}"
+    }
+
+
+# 하위 호환 라우트 (구버전 경로 리다이렉트)
+@app.route("/products/add", methods=["POST"])
+def add_product_compat():
+    return redirect(url_for("index"))
+
+@app.route("/keywords/add", methods=["POST"])
+def add_keyword_compat():
+    return redirect(url_for("index"))
+
+
+with app.app_context():
+    init_db()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=False, host="0.0.0.0", port=port)
