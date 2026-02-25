@@ -436,10 +436,13 @@ def automation():
 
 @app.route("/api/fetch-store-name")
 def api_fetch_store_name():
-    """업체명 조회: Naver Shopping API(mallName) 우선, 실패시 크롤링"""
+    """업체명 조회: keyword+PID로 Shopping API mallName 우선, 실패시 크롤링
+    ?slug=xxx&pid=123&keyword=장뇌삼
+    """
     import requests as req
-    slug = request.args.get("slug", "").strip()
-    pid  = request.args.get("pid", "").strip()
+    slug    = request.args.get("slug", "").strip()
+    pid     = request.args.get("pid", "").strip()
+    keyword = request.args.get("keyword", "").strip()
 
     if not slug:
         return jsonify({"ok": False, "name": "", "error": "slug 없음"})
@@ -450,22 +453,46 @@ def api_fetch_store_name():
         "X-Naver-Client-Secret": client_secret,
     }
 
-    # 1) Naver Shopping 검색 API — PID로 mallName 조회
-    if pid and client_id:
+    def shopping_mall_name(query, pid_to_match):
+        """Shopping API로 query 검색, pid_to_match 매칭 후 mallName 반환"""
+        if not client_id or not query:
+            return None
         try:
-            api_url = f"https://openapi.naver.com/v1/search/shop.json?query={pid}&display=5&sort=sim"
-            resp = req.get(api_url, headers=headers_naver, timeout=6)
-            if resp.status_code == 200:
-                items = resp.json().get("items", [])
-                for item in items:
+            import urllib.parse
+            api_url = (f"https://openapi.naver.com/v1/search/shop.json"
+                       f"?query={urllib.parse.quote(query)}&display=30&sort=sim")
+            resp = req.get(api_url, headers=headers_naver, timeout=8)
+            if resp.status_code != 200:
+                return None
+            items = resp.json().get("items", [])
+            for item in items:
+                item_pid = str(item.get("productId", ""))
+                link = item.get("link", "")
+                m = re.search(r'/products/(\d+)', link)
+                link_pid = m.group(1) if m else ""
+                if pid_to_match and (pid_to_match == item_pid or pid_to_match == link_pid):
                     mall = item.get("mallName", "").strip()
                     if mall and len(mall) <= 30:
-                        logger.info(f"[StoreNameFetch] PID API slug={slug} pid={pid} -> {mall}")
-                        return jsonify({"ok": True, "name": mall, "slug": slug, "source": "api"})
+                        return mall
         except Exception as e:
-            logger.warning(f"[StoreNameFetch] Shopping API 실패: {e}")
+            logger.warning(f"[ShoppingAPI] query={query} 오류: {e}")
+        return None
 
-    # 2) 크롤링 폴백
+    # 1) keyword + PID 매칭 → mallName (가장 정확)
+    if keyword and pid:
+        name = shopping_mall_name(keyword, pid)
+        if name:
+            logger.info(f"[StoreNameFetch] kw-match slug={slug} kw={keyword} -> {name}")
+            return jsonify({"ok": True, "name": name, "slug": slug, "source": "api-kw"})
+
+    # 2) slug로 검색 + PID 매칭 → mallName
+    if slug and pid:
+        name = shopping_mall_name(slug, pid)
+        if name:
+            logger.info(f"[StoreNameFetch] slug-match slug={slug} -> {name}")
+            return jsonify({"ok": True, "name": name, "slug": slug, "source": "api-slug"})
+
+    # 3) 크롤링 폴백
     crawl_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -474,11 +501,8 @@ def api_fetch_store_name():
     }
     try:
         profile_url = f"https://smartstore.naver.com/{slug}"
-        resp = req.get(profile_url, headers=crawl_headers, timeout=8,
-                       allow_redirects=True)
+        resp = req.get(profile_url, headers=crawl_headers, timeout=8, allow_redirects=True)
         html = resp.text
-
-        # og:title
         for pat in [
             r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
             r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']',
@@ -488,22 +512,19 @@ def api_fetch_store_name():
                 raw = m.group(1).strip()
                 name = raw.split(':')[0].strip() if ':' in raw else raw
                 if name and len(name) <= 30:
-                    logger.info(f"[StoreNameFetch] crawl og slug={slug} -> {name}")
+                    logger.info(f"[StoreNameFetch] crawl-og slug={slug} -> {name}")
                     return jsonify({"ok": True, "name": name, "slug": slug, "source": "crawl"})
-
-        # <title>
         m_title = re.search(r'<title[^>]*>([^<]+)</title>', html)
         if m_title:
             raw = m_title.group(1).strip()
             name = raw.split(':')[0].strip() if ':' in raw else raw
             if name and len(name) <= 30:
-                logger.info(f"[StoreNameFetch] crawl title slug={slug} -> {name}")
+                logger.info(f"[StoreNameFetch] crawl-title slug={slug} -> {name}")
                 return jsonify({"ok": True, "name": name, "slug": slug, "source": "crawl-title"})
-
     except Exception as e:
         logger.warning(f"[StoreNameFetch] crawl 실패: {e}")
 
-    # 3) 최종 폴백: slug 반환
+    # 4) 최종 폴백: slug 반환
     logger.info(f"[StoreNameFetch] fallback slug={slug}")
     return jsonify({"ok": False, "name": slug, "slug": slug, "source": "slug"})
 
