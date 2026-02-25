@@ -599,10 +599,11 @@ def api_excel_export():
 
     data = request.get_json(force=True)
     campaigns = data.get("campaigns", [])
+    export_type = data.get("type", "shop")  # 'shop' or 'place'
 
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "네이버쇼핑캠페인"
+    ws.title = "플레이스캠페인" if export_type == "place" else "네이버쇼핑캠페인"
 
     # 헤더 스타일
     hdr_fill  = PatternFill("solid", fgColor="1E293B")
@@ -754,6 +755,297 @@ def _load_workbook_safe(path_or_bytes):
     return _opx.load_workbook(buf)
 
 
+
+
+# ════════════════════════════════════════════════════════════
+# 플레이스 미션 자동화 API 섹션
+# ════════════════════════════════════════════════════════════
+
+@app.route("/api/fetch-place-name")
+def api_fetch_place_name():
+    """플레이스 URL에서 업체명 추출
+    ?url=https://m.place.naver.com/restaurant/1326727196/home
+    """
+    import requests as req
+    from bs4 import BeautifulSoup as _BS4
+    place_url = request.args.get("url", "").strip()
+    if not place_url:
+        return jsonify({"ok": False, "error": "url 파라미터 없음"})
+
+    m = re.search(r'/(?:place|restaurant|cafe|hospital|beauty|hairshop|store)/(\d+)', place_url)
+    if not m:
+        return jsonify({"ok": False, "error": "플레이스 URL에서 ID를 찾을 수 없음"})
+
+    pid = m.group(1)
+    cat_m = re.search(r'naver\.com/([^/?]+)', place_url)
+    cat = cat_m.group(1) if cat_m else "place"
+
+    headers_m = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": "https://m.place.naver.com/",
+    }
+
+    try:
+        fetch_url = f"https://m.place.naver.com/{cat}/{pid}/home"
+        resp = req.get(fetch_url, headers=headers_m, timeout=10)
+        resp.encoding = "utf-8"
+        soup = _BS4(resp.content, "html.parser", from_encoding="utf-8")
+
+        # 방법1: Apollo State에서 PlaceDetailBase 추출
+        for script in soup.find_all("script"):
+            t = script.string or ""
+            if f"PlaceDetailBase:{pid}" in t:
+                nm = re.search(rf'"PlaceDetailBase:{pid}".*?"name"\s*:\s*"([^"]+)"', t)
+                if nm:
+                    name = nm.group(1).strip()
+                    logger.info(f"[PlaceName] Apollo 추출: {name}")
+                    return jsonify({"ok": True, "name": name, "pid": pid, "source": "apollo"})
+
+        # 방법2: og:title
+        og = soup.find("meta", property="og:title")
+        if og and og.get("content"):
+            name = og["content"].replace(": 네이버 지도","").replace("- 네이버 지도","").strip()
+            if name and len(name) < 40:
+                return jsonify({"ok": True, "name": name, "pid": pid, "source": "og"})
+
+        # 방법3: title 태그
+        title = soup.find("title")
+        if title and title.string:
+            name = title.string.replace(": 네이버 지도","").replace("- 네이버 지도","").strip()
+            return jsonify({"ok": True, "name": name, "pid": pid, "source": "title"})
+
+    except Exception as e:
+        logger.warning(f"[PlaceName] 오류: {e}")
+
+    return jsonify({"ok": False, "pid": pid, "error": "업체명 추출 실패"})
+
+
+@app.route("/api/check-place-rank", methods=["POST"])
+def api_check_place_rank():
+    """키워드 검색 시 플레이스 구좌 여부 + 10위 내 순위 확인
+    POST {keywords: ["강남맛집"], url: "https://m.place.naver.com/restaurant/1326727196/home"}
+    Returns: {ok, results: [{keyword, has_section, rank, message}], rank_blocked}
+    """
+    import requests as req
+    from bs4 import BeautifulSoup as _BS4
+    import urllib.parse as _ulp
+
+    data      = request.get_json(force=True) or {}
+    keywords  = data.get("keywords", [])
+    place_url = data.get("url", "")
+
+    if not place_url:
+        return jsonify({"ok": False, "error": "url 필요"})
+
+    m = re.search(r'/(?:place|restaurant|cafe|hospital|beauty|hairshop|store)/(\d+)', place_url)
+    if not m:
+        return jsonify({"ok": False, "error": "플레이스 URL에서 ID 추출 실패"})
+    target_id = m.group(1)
+
+    client_id, client_secret = get_api_keys()
+
+    headers_m = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Referer": "https://m.search.naver.com/",
+    }
+
+    results = []
+    rank_blocked = False
+
+    for kw in keywords:
+        if not kw:
+            continue
+        result = {"keyword": kw, "has_section": False, "rank": None, "message": ""}
+
+        try:
+            found_via_api = False
+
+            # 방법1: 네이버 로컬 검색 API (API 키 있을 때)
+            if client_id and client_secret:
+                api_url = (f"https://openapi.naver.com/v1/search/local.json"
+                           f"?query={_ulp.quote(kw)}&display=10&start=1")
+                r = req.get(api_url, headers={
+                    "X-Naver-Client-Id": client_id,
+                    "X-Naver-Client-Secret": client_secret,
+                }, timeout=8)
+                if r.status_code == 200:
+                    found_via_api = True
+                    items = r.json().get("items", [])
+                    if not items:
+                        result.update({"has_section": False,
+                                       "message": "플레이스 구좌 없음 — 키워드 변경 필요 ⚠️"})
+                        rank_blocked = True
+                    else:
+                        result["has_section"] = True
+                        found = False
+                        for i, item in enumerate(items, 1):
+                            link = item.get("link","")
+                            if target_id in link:
+                                result.update({"rank": i, "message": f"✅ {i}위 확인"})
+                                found = True
+                                if i > 10:
+                                    rank_blocked = True
+                                break
+                        if not found:
+                            result.update({"rank": None,
+                                           "message": "플레이스 구좌는 있으나 10위 밖 — 키워드 변경 권장 ⚠️"})
+                            rank_blocked = True
+
+            # 방법2: HTML 파싱 (API 키 없거나 실패 시)
+            if not found_via_api:
+                search_url = f"https://m.search.naver.com/search.naver?where=m&query={_ulp.quote(kw)}"
+                r = req.get(search_url, headers=headers_m, timeout=15)
+                r.encoding = "utf-8"
+                soup = _BS4(r.content, "html.parser", from_encoding="utf-8")
+
+                place_secs = soup.select("div.place_section")
+                if not place_secs:
+                    result.update({"has_section": False,
+                                   "message": "플레이스 구좌 없음 — 키워드 변경 필요 ⚠️"})
+                    rank_blocked = True
+                else:
+                    result["has_section"] = True
+                    all_ids = []
+                    for sec in place_secs:
+                        for a in sec.find_all("a", href=True):
+                            pm = re.search(r'/(?:place|restaurant|cafe|hospital|beauty|hairshop)/(\d+)', a["href"])
+                            if pm:
+                                pid2 = pm.group(1)
+                                if pid2 not in all_ids:
+                                    all_ids.append(pid2)
+                    if target_id in all_ids:
+                        rank = all_ids.index(target_id) + 1
+                        result.update({"rank": rank, "message": f"✅ {rank}위 확인"})
+                        if rank > 10:
+                            rank_blocked = True
+                    else:
+                        result.update({"rank": None,
+                                       "message": f"플레이스 구좌는 있으나 10위 밖 ({len(all_ids)}위 내 미발견) ⚠️"})
+                        rank_blocked = True
+
+        except Exception as e:
+            result["message"] = f"확인 오류: {str(e)[:60]}"
+
+        results.append(result)
+        logger.info(f"[PlaceRank] kw={kw} target={target_id} → {result.get('message','')}")
+
+    return jsonify({"ok": True, "results": results, "rank_blocked": rank_blocked})
+
+
+@app.route("/api/automation/place-excel-fill", methods=["POST"])
+def api_place_excel_fill():
+    """플레이스 미션 엑셀 다운로드 (템플릿에 채우기)
+    B열=APP, I=키워드, J=미션내용(플레이스), K=정답(명소명), L=네이버앱랜딩, M=업체명블러
+    병합: A,C,D,E,F,G,H,N,O / 수식보존: E,F,G,H,O
+    """
+    import openpyxl
+    from openpyxl.styles import Alignment, Border, Side
+    from openpyxl.utils import column_index_from_string
+    from io import BytesIO
+    import json as _json
+    import os
+
+    use_default      = request.form.get("use_default", "1") == "1"
+    payload          = request.form.get("payload", "{}")
+    start_row        = int(request.form.get("start_row", 3))
+    start_col_letter = request.form.get("start_col", "A").upper().strip()
+    file             = request.files.get("file")
+
+    data      = _json.loads(payload)
+    campaigns = data.get("campaigns", [])
+
+    DEFAULT_TEMPLATE = os.path.join(
+        os.path.dirname(__file__),
+        "static", "templates", "mission_template.xlsx")
+
+    if use_default and os.path.exists(DEFAULT_TEMPLATE):
+        wb = _load_workbook_safe(DEFAULT_TEMPLATE)
+        out_name = "[SKP-재흥광고기획] 미션광고 리스트 (플레이스).xlsx"
+    elif file:
+        try:
+            wb = _load_workbook_safe(BytesIO(file.read()))
+        except Exception:
+            file.seek(0)
+            wb = openpyxl.load_workbook(BytesIO(file.read()), read_only=False, data_only=True)
+        out_name = f"filled_{file.filename}"
+    else:
+        wb = openpyxl.Workbook()
+        out_name = "place_campaign.xlsx"
+
+    ws = wb.active
+    start_col_idx = column_index_from_string(start_col_letter)
+    MERGE_OFFSETS   = [0, 2, 3, 4, 5, 6, 7, 13, 14]
+    FORMULA_OFFSETS = {4, 5, 6, 7, 14}
+
+    def thin_side(): return Side(border_style="thin", color="C8C8C8")
+    def normal_border():
+        s = thin_side()
+        return Border(left=s, right=s, top=s, bottom=s)
+
+    row_num = start_row
+    for camp in campaigns:
+        rows_data = camp.get("rows", [])
+        camp_start_row = row_num
+
+        end_row_pre = row_num + 4
+        ranges_to_unmerge = []
+        for mr in list(ws.merged_cells.ranges):
+            if (mr.min_row <= end_row_pre and mr.max_row >= row_num and
+                    mr.min_col >= start_col_idx and mr.max_col <= start_col_idx + 14):
+                ranges_to_unmerge.append(str(mr))
+        for ref in ranges_to_unmerge:
+            try: ws.unmerge_cells(ref)
+            except: pass
+
+        for ri, rd in enumerate(rows_data):
+            for col_offset in range(15):
+                col_excel = start_col_idx + col_offset
+                val = rd[col_offset] if col_offset < len(rd) else ""
+                if val == "__merge__": val = ""
+
+                is_merge_col   = col_offset in MERGE_OFFSETS
+                is_formula_col = col_offset in FORMULA_OFFSETS
+
+                if is_merge_col and ri > 0:
+                    continue
+
+                cell = ws.cell(row=row_num, column=col_excel)
+
+                if not is_formula_col:
+                    if val != "":
+                        cell.value = val
+                    cell.alignment = Alignment(wrap_text=True, vertical="center", horizontal="center")
+                    if col_offset == 9:  # J: 미션내용
+                        cell.alignment = Alignment(wrap_text=True, vertical="top", horizontal="left")
+
+                cell.border = normal_border()
+
+            row_num += 1
+
+        for r in range(camp_start_row, camp_start_row + 5):
+            ws.row_dimensions[r].height = 50
+
+        end_row = camp_start_row + 4
+        for off in MERGE_OFFSETS:
+            mc = start_col_idx + off
+            try:
+                ws.merge_cells(start_row=camp_start_row, start_column=mc,
+                               end_row=end_row, end_column=mc)
+                ws.cell(camp_start_row, mc).alignment = Alignment(
+                    horizontal="center", vertical="center", wrap_text=True)
+            except Exception:
+                pass
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.read(), 200, {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": "attachment; filename*=UTF-8''" + __import__('urllib.parse', fromlist=['quote']).quote(out_name, safe='')
+    }
+
 # ════════════════════════════════════════════
 # Excel 기존 파일 채우기 (v15 구조)
 # ════════════════════════════════════════════
@@ -884,9 +1176,11 @@ def api_excel_fill():
     output = BytesIO()
     wb.save(output)
     output.seek(0)
+    import urllib.parse as _uparse
+    safe_name = _uparse.quote(out_name, safe='')
     return output.read(), 200, {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "Content-Disposition": f"attachment; filename={out_name}"
+        "Content-Disposition": "attachment; filename*=UTF-8''" + safe_name
     }
 
 
