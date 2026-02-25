@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}업무 자동화 - 네이버 쇼핑 (가격비교){% endblock %}
+{% block title %}업무 자동화{% endblock %}
 
 {% block extra_style %}
 <style>
@@ -227,13 +227,14 @@ input[type=number]{background:#0d1220 !important;color:#e2e8f0 !important;border
 {% block content %}
 <div style="max-width:100%;padding:0 2px;">
   <div style="margin-bottom:14px;">
-    <h2 style="font-size:1.05rem;font-weight:700;color:#e2e8f0;margin:0 0 3px;">📊 네이버 쇼핑 (가격비교)</h2>
+    <h2 style="font-size:1.05rem;font-weight:700;color:#e2e8f0;margin:0 0 3px;">📊 업무 자동화</h2>
     <div style="font-size:.72rem;color:#475569;">발주 데이터 → 캠페인 시트 자동 생성 · 엑셀 다운로드</div>
   </div>
 
   <!-- 탭 -->
   <div class="auto-tabs">
-    <div class="auto-tab active" onclick="switchTab('reward')">네이버 쇼핑 (가격비교)</div>
+    <div class="auto-tab active" onclick="switchTab('reward')">🛍 네이버 쇼핑 (가격비교)</div>
+    <div class="auto-tab" onclick="switchTab('place')">📍 플레이스 (명소)</div>
     <div class="auto-tab" onclick="switchTab('bulk')">일괄처리</div>
   </div>
 
@@ -331,7 +332,7 @@ input[type=number]{background:#0d1220 !important;color:#e2e8f0 !important;border
             <tr>
               <th class="row-hd">#</th>
               <th class="w-A">A<br><span style="font-size:.52rem;color:#64748b;">구분</span></th>
-              <th class="w-B">B<br><span style="font-size:.52rem;color:#f59e0b;">WEB</span></th>
+              <th class="w-B">B<br><span style="font-size:.52rem;color:#f59e0b;">WEB/APP</span></th>
               <th class="w-C">C<br><span style="font-size:.52rem;color:#03c75a;">시작일</span></th>
               <th class="w-D">D<br><span style="font-size:.52rem;color:#03c75a;">종료일</span></th>
               <th class="w-E">E<br><span style="font-size:.52rem;color:#1e3a5f;">총예산</span></th>
@@ -354,16 +355,166 @@ input[type=number]{background:#0d1220 !important;color:#e2e8f0 !important;border
       <!-- 다운로드 버튼 -->
       <div class="dl-btns">
         <button class="btn-dl btn-dl-green" onclick="copySelected()">📋 선택 복사</button>
-        <button class="btn-dl btn-dl-xlsx" id="btnXlsx" onclick="downloadXlsx()">📥 새 .xlsx</button>
-        <button class="btn-dl btn-dl-fill" id="btnFill" onclick="fillTemplate()">📁 템플릿에 채우기</button>
+        <button class="btn-dl btn-dl-xlsx" id="btnXlsx" onclick="downloadXlsx()">📥 엑셀 다운로드 (비상용)</button>
+        <button class="btn-dl btn-dl-fill" id="btnFill" onclick="fillTemplate()">⬇️ 엑셀 다운로드</button>
         <button class="btn-dl btn-dl-gray" onclick="copyAllTSV()">📄 TSV 복사</button>
       </div>
       <div style="font-size:.65rem;color:#475569;margin-top:5px;">
-        📁 템플릿에 채우기 = mission_template.xlsx에 데이터 삽입하여 다운로드 (시작행 3, A열~)
+        ⬇️ 엑셀 다운로드 = 템플릿에 데이터 삽입 · 📥 비상용 = 새 xlsx 파일 생성
       </div>
     </div>
 
+
   </div><!-- /tab-reward -->
+
+  <!-- ══════ 플레이스 탭 ══════ -->
+  <div id="tab-place" class="tab-panel">
+
+    <!-- STEP 1: 발주 붙여넣기 -->
+    <div class="panel">
+      <div class="panel-title">① 발주 데이터 붙여넣기</div>
+      <div style="font-size:.68rem;color:#64748b;margin-bottom:6px;">
+        발주 엑셀에서 행을 복사(Ctrl+C) 후 붙여넣기 (Ctrl+V)<br>
+        컬럼 순서: <span class="col-badge"><strong>1</strong> 시작일</span>
+        <span class="col-badge"><strong>2</strong> 종료일</span>
+        <span class="col-badge"><strong>3</strong> 키워드</span>
+        <span class="col-badge"><strong>4</strong> 플레이스URL</span>
+        <span class="col-badge"><strong>5</strong> 플레이스명</span>
+        <span class="col-badge"><strong>6</strong> 일유입</span>
+      </div>
+      <textarea id="placeOrderPaste" class="order-paste-area" rows="3"
+        placeholder="발주 엑셀에서 복사 후 Ctrl+V로 붙여넣기&#10;(탭으로 구분된 행)"></textarea>
+      <div style="margin-top:8px;display:flex;gap:6px;align-items:center;">
+        <button class="btn btn-primary btn-sm" onclick="parsePlacePaste()">📋 파싱하기</button>
+        <button class="btn btn-secondary btn-sm" onclick="loadPlaceDemo()">🔍 예시 데이터</button>
+        <span id="placeRowCountBadge" style="font-size:.68rem;color:#64748b;"></span>
+      </div>
+    </div>
+
+    <!-- STEP 2: 발주 확인 테이블 -->
+    <div id="placeOrderTablePanel" style="display:none;" class="panel">
+      <div class="panel-title" style="justify-content:space-between;">
+        <span>② 발주 확인 · 순위 체크</span>
+        <button class="btn btn-secondary btn-sm" onclick="clearPlaceOrders()">🗑 초기화</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="order-table" id="placeOrderTable">
+          <thead><tr>
+            <th><input type="checkbox" id="placeChkAll" onchange="placeToggleAll(this)"></th>
+            <th>#</th>
+            <th>시작일</th><th>종료일</th><th>키워드</th>
+            <th>플레이스URL</th><th>플레이스명 <small>(자동)</small></th>
+            <th>일유입</th><th>순위</th>
+          </tr></thead>
+          <tbody id="placeOrderTbody"></tbody>
+        </table>
+      </div>
+
+      <!-- 명소명 입력 -->
+      <div style="margin-top:12px;background:#0d1525;border:1px solid #1e293b;border-radius:8px;padding:12px;">
+        <div style="font-size:.7rem;color:#03c75a;font-weight:700;margin-bottom:6px;">🏛 정답 명소명 입력</div>
+        <div style="font-size:.65rem;color:#64748b;margin-bottom:8px;">
+          플레이스의 <strong style="color:#e2e8f0;">주변 탭 → 명소 탭</strong>에서 15번째 명소명을 입력하세요.<br>
+          ※ 띄어쓰기 없이 붙여서 입력 (예: <code style="color:#f59e0b;">창원향교</code>)
+        </div>
+        <input type="text" id="placeSpotAnswer" placeholder="명소명 입력 (예: 창원향교)"
+          style="width:100%;background:#0a0f1a;border:1px solid #1e3a5f;color:#e2e8f0;
+                 border-radius:6px;padding:7px 10px;font-size:.8rem;box-sizing:border-box;">
+        <div id="placeSpotPreview" style="font-size:.65rem;color:#94a3b8;margin-top:5px;"></div>
+      </div>
+
+      <!-- 미션 템플릿 -->
+      <div style="margin-top:12px;">
+        <div class="panel-title">미션내용 템플릿</div>
+        <div class="mission-tpl-wrap">
+          <textarea id="placeMissionTpl" rows="14">미션 수행하며,
+리워드 즉시 적립 받으세요!
+
+1. 하단 [검색어 복사하기] 버튼을 클릭 하고, 키워드를 복사해주세요.
+2. 힌트보러가기 버튼 클릭 후 네이버 앱에 접속해주세요.
+3. 복사된 키워드를 검색 창에 붙여넣고 검색해주세요.
+4.[*{blurred_name}]플레이스를 방문 하고 [ 주변 ] 탭을 클릭 해주세요.
+※ 복사된 키워드 검색 시, 해당 플레이스가 없는 경우 아래 '펼쳐서 더보기' 클릭하여 찾아주세요.
+5. [ 주변 ] 탭을 클릭 후 바로 아래 [ 명소 ] 탭을 클릭 해주세요.
+6. [ 초성힌트 ]를 보고 [ 명소 ] 탭에서 정답을 찾아주세요.
+
+*해당탭이 사라지면 [ 명소 ]탭에서 찾을 수 있습니다.
+7. 초성힌트 : {{chosung}}
+정답 : <{answer_len}> 글자
+* 정답란에 띄어쓰기 없이 입력 후 제출해주세요.</textarea>
+          <div class="tpl-hint">변수: {blurred_name} 앞글자 블러처리 업체명 · {chosung} 초성힌트 자동생성 · {answer_len} 글자수 자동계산</div>
+        </div>
+      </div>
+
+      <div style="margin-top:10px;">
+        <button class="btn btn-primary" onclick="generatePlaceAll()" style="width:100%;font-size:.82rem;padding:9px;">
+          ⚡ 플레이스 캠페인 시트 생성
+        </button>
+      </div>
+    </div>
+
+    <!-- STEP 3: 시트 결과 -->
+    <div id="placeResultPanel" style="display:none;" class="panel">
+      <div class="panel-title">③ 생성된 플레이스 캠페인 시트</div>
+
+      <div class="sheet-toolbar">
+        <button class="btn btn-secondary btn-sm" onclick="selectAllPlace()">전체 선택</button>
+        <button class="btn btn-secondary btn-sm" onclick="clearSelectionPlace()">선택 해제</button>
+        <span id="placeSelInfo" class="sel-info"></span>
+      </div>
+
+      <div class="camp-tabs-bar" id="placeCampaignTabs"></div>
+
+      <div class="sheet-wrap">
+        <table class="isheet" id="placeSheet">
+          <colgroup>
+            <col class="row-hd">
+            <col class="w-A"><col class="w-B"><col class="w-C"><col class="w-D">
+            <col class="w-E"><col class="w-F"><col class="w-G"><col class="w-H">
+            <col class="w-I"><col class="w-J"><col class="w-K"><col class="w-L">
+            <col class="w-M"><col class="w-N"><col class="w-O">
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="row-hd">#</th>
+              <th class="w-A">A<br><span style="font-size:.52rem;color:#64748b;">구분</span></th>
+              <th class="w-B">B<br><span style="font-size:.52rem;color:#f97316;">APP</span></th>
+              <th class="w-C">C<br><span style="font-size:.52rem;color:#03c75a;">시작일</span></th>
+              <th class="w-D">D<br><span style="font-size:.52rem;color:#03c75a;">종료일</span></th>
+              <th class="w-E">E<br><span style="font-size:.52rem;color:#1e3a5f;">총예산</span></th>
+              <th class="w-F">F<br><span style="font-size:.52rem;color:#1e3a5f;">총예산↑</span></th>
+              <th class="w-G">G<br><span style="font-size:.52rem;color:#1e3a5f;">일예산</span></th>
+              <th class="w-H">H<br><span style="font-size:.52rem;color:#1e3a5f;">포인트</span></th>
+              <th class="w-I">I<br><span style="font-size:.52rem;color:#3b82f6;">검색어</span></th>
+              <th class="w-J">J<br><span style="font-size:.52rem;color:#e2e8f0;">미션내용</span></th>
+              <th class="w-K">K<br><span style="font-size:.52rem;color:#fbbf24;">정답(명소)</span></th>
+              <th class="w-L">L<br><span style="font-size:.52rem;color:#f97316;">앱랜딩</span></th>
+              <th class="w-M">M<br><span style="font-size:.52rem;color:#a78bfa;">업체명</span></th>
+              <th class="w-N">N<br><span style="font-size:.52rem;color:#03c75a;">일유입</span></th>
+              <th class="w-O">O<br><span style="font-size:.52rem;color:#1e3a5f;">글자수</span></th>
+            </tr>
+          </thead>
+          <tbody id="placeSheetBody"></tbody>
+        </table>
+      </div>
+
+      <!-- 다운로드 버튼 - 메인 버튼 크게 -->
+      <div style="margin-top:12px;">
+        <button id="btnPlaceFill" onclick="fillPlaceTemplate()"
+          style="width:100%;padding:12px;font-size:.9rem;font-weight:700;
+                 background:linear-gradient(135deg,#03c75a,#059c46);color:#fff;
+                 border:none;border-radius:8px;cursor:pointer;letter-spacing:.03em;">
+          ⬇️ 엑셀 다운로드
+        </button>
+      </div>
+      <div class="dl-btns" style="margin-top:8px;">
+        <button class="btn-dl btn-dl-green" onclick="copySelectedPlace()">📋 선택 복사</button>
+        <button class="btn-dl btn-dl-xlsx" id="btnPlaceXlsx" onclick="downloadPlaceXlsx()">📥 엑셀 다운로드 (비상용)</button>
+        <button class="btn-dl btn-dl-gray" onclick="copyPlaceTSV()">📄 TSV 복사</button>
+      </div>
+    </div>
+
+  </div><!-- /tab-place -->
 
   <!-- 일괄처리 탭 -->
   <div id="tab-bulk" class="tab-panel">
@@ -979,5 +1130,342 @@ function fillTemplate(){
     })
     .catch(e=>{ alert('내보내기 실패: '+e.message); btn.textContent='📁 템플릿에 채우기'; btn.disabled=false; });
 }
+
+// ══════════════════════════════════════════════════════════
+//  플레이스 탭 로직
+// ══════════════════════════════════════════════════════════
+
+let placeOrderRows = [];
+let placeCampaignData = [];
+let placeRankBlocked = false;
+
+// 초성 생성 함수
+function getChosung(str) {
+  const CHO = ['ㄱ','ㄲ','ㄴ','ㄷ','ㄸ','ㄹ','ㅁ','ㅂ','ㅃ','ㅅ','ㅆ','ㅇ','ㅈ','ㅉ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ'];
+  return [...str].map(ch => {
+    const code = ch.charCodeAt(0) - 0xAC00;
+    if(code < 0 || code > 11171) return '';
+    return CHO[Math.floor(code/588)];
+  }).join('');
+}
+
+// 발주 파싱 (플레이스)
+function parsePlacePaste(){
+  const raw = document.getElementById('placeOrderPaste').value.trim();
+  if(!raw){ alert('붙여넣기 할 내용이 없습니다.'); return; }
+  const lines = raw.split('\n').map(l=>l.trim()).filter(Boolean);
+  placeOrderRows = [];
+  for(const line of lines){
+    const cols = line.split('\t');
+    // 컬럼: 시작일, 종료일, 키워드(복수 쉼표/슬래시), 플레이스URL, 플레이스명, 일유입
+    const start   = cols[0]||'';
+    const end     = cols[1]||'';
+    const kwRaw   = cols[2]||'';
+    const url     = cols[3]||'';
+    const name    = cols[4]||'';
+    const daily   = cols[5]||'';
+    const keywords = kwRaw.split(/[,\/]/).map(k=>k.trim()).filter(Boolean);
+    placeOrderRows.push({ start, end, keywords, url, name, daily,
+      store:'', pid:'', rankResults:[] });
+  }
+  renderPlaceOrderTable();
+  document.getElementById('placeOrderTablePanel').style.display = 'block';
+  document.getElementById('placeOrderTablePanel').scrollIntoView({behavior:'smooth'});
+  document.getElementById('placeOrderPaste').value = '';
+
+  // 플레이스명 자동 조회
+  placeOrderRows.forEach((r,i) => {
+    if(r.url && !r.name){
+      fetch('/api/fetch-place-name?url='+encodeURIComponent(r.url))
+        .then(res=>res.json())
+        .then(d=>{
+          if(d.ok){
+            placeOrderRows[i].name = d.name;
+            placeOrderRows[i].pid  = d.pid||'';
+          }
+          renderPlaceOrderTable();
+        }).catch(()=>{});
+    } else if(r.url && !r.pid){
+      // URL에서 pid 추출
+      const m = r.url.match(/\/(\d{7,})/);
+      if(m) placeOrderRows[i].pid = m[1];
+    }
+  });
+}
+
+function loadPlaceDemo(){
+  document.getElementById('placeOrderPaste').value =
+    "2025-02-24\t2025-03-24\t강남맛집,삼성역맛집\thttps://m.place.naver.com/restaurant/1326727196/home\t트라가 삼성점\t100";
+  parsePlacePaste();
+}
+
+function clearPlaceOrders(){
+  placeOrderRows = [];
+  placeCampaignData = [];
+  document.getElementById('placeOrderTablePanel').style.display='none';
+  document.getElementById('placeResultPanel').style.display='none';
+}
+
+function placeToggleAll(cb){
+  document.querySelectorAll('.place-row-chk').forEach(c=>{ c.checked=cb.checked; });
+}
+
+function renderPlaceOrderTable(){
+  const tbody = document.getElementById('placeOrderTbody');
+  const badge = document.getElementById('placeRowCountBadge');
+  badge.textContent = `${placeOrderRows.length}건`;
+
+  tbody.innerHTML = placeOrderRows.map((r,i)=>`
+    <tr>
+      <td><input type="checkbox" class="place-row-chk" checked></td>
+      <td>${i+1}</td>
+      <td>${r.start}</td><td>${r.end}</td>
+      <td>${r.keywords.join(', ')}</td>
+      <td style="font-size:.62rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;">
+        <a href="${r.url}" target="_blank" style="color:#3b82f6;">${r.url.slice(0,40)}...</a></td>
+      <td>
+        <input type="text" value="${r.name}" onchange="placeOrderRows[${i}].name=this.value"
+          style="background:#0a0f1a;border:1px solid #1e3a5f;color:#e2e8f0;border-radius:4px;padding:3px 6px;font-size:.72rem;width:110px;">
+        ${r.pid?'<span style="font-size:.6rem;color:#64748b;">ID:'+r.pid+'</span>':''}
+      </td>
+      <td><input type="number" value="${r.daily}" onchange="placeOrderRows[${i}].daily=this.value"
+        style="background:#0a0f1a;border:1px solid #1e3a5f;color:#e2e8f0;border-radius:4px;padding:3px 6px;font-size:.72rem;width:60px;"></td>
+      <td id="placeRank_${i}">
+        ${r.rankResults.length?
+          r.rankResults.map(rr=>`<span style="font-size:.65rem;color:${rr.rank&&rr.rank<=10?'#03c75a':'#ef4444'};">${rr.keyword}: ${rr.message||'-'}</span>`).join('<br>')
+          :'<button class="btn btn-secondary btn-sm" onclick="checkPlaceRankRow('+i+')" style="font-size:.62rem;padding:2px 6px;">순위 확인</button>'}
+      </td>
+    </tr>
+  `).join('');
+}
+
+// 개별 행 순위 확인
+function checkPlaceRankRow(idx){
+  const r = placeOrderRows[idx];
+  if(!r.url){ alert('플레이스 URL을 입력해주세요.'); return; }
+  const cell = document.getElementById('placeRank_'+idx);
+  cell.innerHTML = '<span style="color:#94a3b8;font-size:.65rem;">확인 중...</span>';
+
+  fetch('/api/check-place-rank', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ keywords: r.keywords, url: r.url })
+  }).then(res=>res.json()).then(d=>{
+    if(d.ok){
+      placeOrderRows[idx].rankResults = d.results;
+      if(d.rank_blocked) placeRankBlocked = true;
+      renderPlaceOrderTable();
+    }
+  }).catch(e=>{ cell.innerHTML = '<span style="color:#ef4444;font-size:.65rem;">오류</span>'; });
+}
+
+// 명소명 입력 시 초성/글자수 미리보기
+document.addEventListener('DOMContentLoaded', ()=>{
+  const spotInput = document.getElementById('placeSpotAnswer');
+  const spotPreview = document.getElementById('placeSpotPreview');
+  if(spotInput){
+    spotInput.addEventListener('input', ()=>{
+      const v = spotInput.value.replace(/\s/g,'');
+      spotInput.value = v;  // 공백 실시간 제거
+      if(v){
+        const cho = getChosung(v);
+        spotPreview.innerHTML = `초성힌트: <strong style="color:#f59e0b;">{${cho}}</strong>  /  글자수: <strong style="color:#03c75a;">${v.length}글자</strong>`;
+      } else {
+        spotPreview.textContent = '';
+      }
+    });
+  }
+});
+
+// 플레이스 캠페인 시트 생성
+function generatePlaceAll(){
+  const checkboxes = [...document.querySelectorAll('.place-row-chk')];
+  const selected = placeOrderRows.filter((_,i)=>checkboxes[i]&&checkboxes[i].checked);
+  if(!selected.length){ alert('생성할 발주를 선택해주세요.'); return; }
+
+  if(placeRankBlocked){
+    if(!confirm('⚠️ 플레이스 구좌 없음 또는 10위 밖 키워드가 있습니다. 그래도 생성하시겠습니까?')) return;
+  }
+
+  const tpl = document.getElementById('placeMissionTpl').value;
+  const spotAnswer = document.getElementById('placeSpotAnswer').value.replace(/\s/g,'');
+
+  if(!spotAnswer){ alert('정답 명소명을 입력해주세요.'); return; }
+
+  const chosung = getChosung(spotAnswer);
+  const answerLen = spotAnswer.length;
+
+  placeCampaignData = [];
+
+  for(const r of selected){
+    const blurred = r.name ? ('■'+r.name.slice(1)) : '■업체명';
+    const pid = r.pid || (r.url.match(/\/(\d{7,})/)||[])[1] || '';
+
+    let kws = (r.keywords||[]).filter(Boolean);
+    if(!kws.length) kws=[''];
+    const kwList = [];
+    for(let i=0;i<5;i++) kwList.push(kws[i%kws.length]);
+
+    const rows = [];
+    for(let i=0;i<5;i++){
+      const kw = kwList[i];
+      const mission = tpl
+        .replace(/\{blurred_name\}/g, blurred)
+        .replace(/\{store_name\}/g,   r.name||'업체명')
+        .replace(/\{keyword\}/g,      kw||'키워드')
+        .replace(/\{chosung\}/g,      chosung)
+        .replace(/\{answer_len\}/g,   answerLen);
+
+      rows.push([
+        i===0?'일반':'__merge__',     // [0] A
+        'APP',                         // [1] B ← 플레이스는 APP
+        i===0?r.start:'__merge__',    // [2] C
+        i===0?r.end:'__merge__',      // [3] D
+        i===0?'':'__merge__',         // [4] E
+        i===0?'':'__merge__',         // [5] F
+        i===0?'':'__merge__',         // [6] G
+        i===0?'':'__merge__',         // [7] H
+        kw,                            // [8] I 검색어
+        mission,                       // [9] J 미션내용
+        spotAnswer,                    // [10] K 정답(명소명)
+        '네이버앱랜딩',                // [11] L
+        blurred,                       // [12] M 업체명(블러)
+        i===0?String(r.daily||''):'__merge__', // [13] N
+        i===0?'':'__merge__',         // [14] O
+      ]);
+    }
+    placeCampaignData.push({ meta:r, rows });
+  }
+
+  renderPlaceSheet();
+  document.getElementById('placeResultPanel').style.display='block';
+  document.getElementById('placeResultPanel').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+// 플레이스 시트 렌더링
+function renderPlaceSheet(){
+  const tbody = document.getElementById('placeSheetBody');
+  const tabsBar = document.getElementById('placeCampaignTabs');
+  if(!tbody||!placeCampaignData.length) return;
+
+  tabsBar.innerHTML = placeCampaignData.map((c,i)=>`
+    <button class="camp-tab" onclick="scrollToPlaceCamp(${i})">
+      📍 캠페인 ${i+1}: ${(c.meta.keywords||[]).slice(0,2).join(',')}
+    </button>`).join('');
+
+  let html = '';
+  placeCampaignData.forEach((camp, ci)=>{
+    camp.rows.forEach((rd, ri)=>{
+      const globalIdx = ci*5+ri;
+      const isMerge = [0,2,3,4,5,6,7,13,14];
+      const isFirst = ri===0;
+      html += `<tr data-camp="${ci}" data-row="${ri}" ${isFirst?`id="placeCamp${ci}"`:''}
+        style="${isFirst?'border-top:2px solid #1e3a5f;':''}">`;
+      html += `<td class="row-hd">${isFirst?`<input type="checkbox" class="place-cell-chk" checked data-camp="${ci}">`:''}</td>`;
+      rd.forEach((val,colIdx)=>{
+        if(isMerge.includes(colIdx)&&ri>0) return;
+        const display = val==='__merge__'?'':val;
+        const rowspan = isMerge.includes(colIdx)?5:1;
+        const CELL_TYPES=['c-type','c-web','c-date','c-date','c-formula','c-formula','c-formula','c-formula','c-kw','c-mission','c-answer','c-hint','c-store','c-daily','c-formula'];
+        html += `<td class="${CELL_TYPES[colIdx]||''}" rowspan="${rowspan}"
+          contenteditable="true"
+          onmousedown="handlePlaceCellDown(event,${ci},${ri},${colIdx})"
+          style="${colIdx===9?'text-align:left;white-space:pre-wrap;font-size:.62rem;':''}">
+          ${display.replace(/\n/g,'<br>')}
+        </td>`;
+      });
+      html += '</tr>';
+    });
+  });
+  tbody.innerHTML = html;
+  document.getElementById('placeSelInfo').textContent = `${placeCampaignData.length}개 캠페인 (${placeCampaignData.length*5}행)`;
+}
+
+function scrollToPlaceCamp(idx){
+  const el = document.getElementById('placeCamp'+idx);
+  if(el) el.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+function handlePlaceCellDown(e,ci,ri,col){ /* 선택 처리 - 간단 */ }
+function selectAllPlace(){ document.querySelectorAll('.place-cell-chk').forEach(c=>c.checked=true); }
+function clearSelectionPlace(){ document.querySelectorAll('.place-cell-chk').forEach(c=>c.checked=false); }
+
+// 플레이스 TSV 복사
+function copyPlaceTSV(){
+  if(!placeCampaignData.length){ alert('생성된 데이터가 없습니다.'); return; }
+  let tsv='';
+  placeCampaignData.forEach(c=>{
+    c.rows.forEach(rd=>{
+      tsv += rd.map(v=>v==='__merge__'?'':String(v||'').replace(/\t/g,' ')).join('\t')+'\n';
+    });
+  });
+  navigator.clipboard.writeText(tsv).then(()=>alert('TSV 복사 완료!')).catch(()=>{
+    const ta=document.createElement('textarea');
+    ta.value=tsv; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+    alert('TSV 복사 완료!');
+  });
+}
+
+function copySelectedPlace(){
+  copyPlaceTSV();
+}
+
+// 플레이스 엑셀 다운로드 (비상용 - 새 xlsx)
+function downloadPlaceXlsx(){
+  if(!placeCampaignData.length){ alert('생성된 데이터가 없습니다.'); return; }
+  const btn = document.getElementById('btnPlaceXlsx');
+  btn.disabled=true; btn.textContent='⏳ 생성 중...';
+
+  const campaigns = placeCampaignData.map(c=>({
+    rows: c.rows,
+    meta: { start:c.meta.start, end:c.meta.end, keywords:c.meta.keywords, url:c.meta.url,
+            name:c.meta.name, daily:c.meta.daily }
+  }));
+
+  fetch('/api/automation/excel-export', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ campaigns, type:'place' })
+  }).then(r=>r.blob()).then(blob=>{
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='place_campaign.xlsx';
+    a.click();
+    btn.disabled=false; btn.textContent='📥 엑셀 다운로드 (비상용)';
+  }).catch(e=>{ alert('오류: '+e.message); btn.disabled=false; btn.textContent='📥 엑셀 다운로드 (비상용)'; });
+}
+
+// 플레이스 엑셀 다운로드 (메인 - 템플릿 채우기)
+function fillPlaceTemplate(){
+  if(!placeCampaignData.length){ alert('생성된 데이터가 없습니다.'); return; }
+  const btn = document.getElementById('btnPlaceFill');
+  btn.disabled=true; btn.textContent='⏳ 다운로드 준비 중...';
+
+  const campaigns = placeCampaignData.map(c=>({
+    rows: c.rows,
+    meta: { start:c.meta.start, end:c.meta.end, keywords:c.meta.keywords,
+            url:c.meta.url, name:c.meta.name, daily:c.meta.daily }
+  }));
+
+  const fd = new FormData();
+  fd.append('use_default','1');
+  fd.append('start_row','3');
+  fd.append('start_col','A');
+  fd.append('payload', JSON.stringify({ campaigns }));
+
+  fetch('/api/automation/place-excel-fill', { method:'POST', body:fd })
+    .then(r=>{
+      if(!r.ok) return r.text().then(t=>{ throw new Error(t.slice(0,200)); });
+      return r.blob();
+    })
+    .then(blob=>{
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download='[SKP-재흥광고기획] 미션광고 리스트 (플레이스).xlsx';
+      a.click();
+      btn.disabled=false; btn.textContent='⬇️ 엑셀 다운로드';
+    })
+    .catch(e=>{ alert('다운로드 오류: '+e.message); btn.disabled=false; btn.textContent='⬇️ 엑셀 다운로드'; });
+}
+
 </script>
 {% endblock %}
