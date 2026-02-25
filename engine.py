@@ -36,11 +36,22 @@ NAVER_SHOP_API = "https://openapi.naver.com/v1/search/shop.json"
 # ─────────────────────────────────────────
 def parse_product_info(url: str) -> dict:
     """
-    URL에서 product_id, catalog_id, mall_name 힌트 추출
-    Returns: {"product_id": str|None, "catalog_id": str|None, "url_type": str}
+    URL에서 product_id, catalog_id, url_product_id 추출
+
+    [중요] 네이버 쇼핑 API의 productId 구조:
+      - 스마트스토어 URL의 products/{숫자} ≠ API의 productId (완전히 다른 값!)
+      - API의 link 필드에는 스마트스토어 URL이 그대로 들어있음
+      - 따라서 URL 내 숫자(url_product_id)로 link 필드를 매칭해야 함
+
+    Returns: {
+      "product_id": str|None,       # URL에서 뽑은 숫자 (매칭 키로 사용)
+      "catalog_id": str|None,       # 가격비교 카탈로그 ID
+      "url_product_id": str|None,   # 스마트스토어 products/{숫자} (link 매칭용)
+      "url_type": str
+    }
     """
     url = url.strip()
-    result = {"product_id": None, "catalog_id": None, "url_type": "unknown"}
+    result = {"product_id": None, "catalog_id": None, "url_product_id": None, "url_type": "unknown"}
 
     # 순수 숫자 직접 입력
     if re.fullmatch(r'\d{8,}', url):
@@ -52,14 +63,16 @@ def parse_product_info(url: str) -> dict:
     m = re.search(r'shopping\.naver\.com/catalog/(\d+)', url)
     if m:
         result["catalog_id"] = m.group(1)
-        result["product_id"] = m.group(1)   # catalog_id를 product_id로도 사용
+        result["product_id"] = m.group(1)
         result["url_type"] = "catalog"
         return result
 
-    # ② 스마트스토어 URL → product_id
-    m = re.search(r'smartstore\.naver\.com/[^/]+/products/(\d+)', url)
+    # ② 스마트스토어 URL → url_product_id (link 매칭용)
+    m = re.search(r'smartstore\.naver\.com/[^/?#]+/products/(\d+)', url)
     if m:
-        result["product_id"] = m.group(1)
+        uid = m.group(1)
+        result["product_id"] = uid
+        result["url_product_id"] = uid   # ★ link 필드 매칭에 사용
         result["url_type"] = "smartstore"
         return result
 
@@ -130,39 +143,52 @@ def normalize_name(s: str) -> str:
 # ─────────────────────────────────────────
 def is_match(item: dict, product: dict) -> bool:
     """
-    API 응답 item이 추적 대상 product인지 3단계로 확인
+    API 응답 item이 추적 대상 product인지 4단계로 확인
+
+    [네이버 쇼핑 API 상품 ID 구조 주의]
+    - API productId ≠ 스마트스토어 URL의 products/{숫자}
+    - 스마트스토어 상품은 API의 'link' 필드에 원본 URL이 포함됨
+    - 따라서 url_product_id로 link 필드를 검색해야 정확히 찾을 수 있음
 
     product 구조:
     {
-      "product_id": "...",    # URL에서 파싱된 ID (스마트스토어 or 카탈로그)
-      "catalog_id": "...",    # 가격비교 카탈로그 ID (별도 입력 or catalog URL에서 파싱)
-      "mall_name": "...",     # 스토어명 (fallback 매칭용)
-      "product_name": "...",  # 사용자 지정 별칭
+      "product_id": "...",        # URL에서 파싱된 숫자
+      "catalog_id": "...",        # 가격비교 카탈로그 ID
+      "url_product_id": "...",    # 스마트스토어 products/{숫자} ← link 매칭용
+      "mall_name": "...",         # 스토어명 (fallback)
     }
     """
-    api_pid = str(item.get("productId", "")).strip()
+    api_pid  = str(item.get("productId", "")).strip()
+    api_link = item.get("link", "")
     api_mall = item.get("mallName", "")
-    api_type = item.get("productType", 0)
 
-    # ──── 1순위: catalog_id 직접 매칭 (가격비교 카탈로그 상품) ────
+    # ──── 1순위: catalog_id 직접 매칭 (가격비교 카탈로그) ────
     catalog_id = str(product.get("catalog_id") or "").strip()
     if catalog_id and api_pid == catalog_id:
-        logger.debug(f"  [catalog_id 매칭] {api_pid}")
+        logger.debug(f"  [1순위 catalog_id 매칭] {api_pid}")
         return True
 
-    # ──── 2순위: product_id 직접 매칭 (일반 스마트스토어 상품) ────
+    # ──── 2순위: url_product_id → link 필드 포함 매칭 ────
+    # 스마트스토어 URL의 products/{숫자}가 API link에 들어있는지 확인
+    # 예) url_product_id=5835104592, api_link=https://smartstore.naver.com/main/products/5835104592
+    url_pid = str(product.get("url_product_id") or "").strip()
+    if url_pid and url_pid in api_link:
+        logger.debug(f"  [2순위 link 포함 매칭] url_pid={url_pid} in link={api_link}")
+        return True
+
+    # ──── 3순위: product_id 직접 매칭 (API productId와 동일한 경우) ────
     product_id = str(product.get("product_id") or "").strip()
     if product_id and api_pid == product_id:
-        logger.debug(f"  [product_id 매칭] {api_pid}")
+        logger.debug(f"  [3순위 product_id 직접 매칭] {api_pid}")
         return True
 
-    # ──── 3순위: mall_name 부분 일치 (스토어명 fallback) ────
+    # ──── 4순위: mall_name 부분 일치 (최후 fallback) ────
     mall_name_target = product.get("mall_name", "").strip()
     if mall_name_target:
         t_norm = normalize_name(mall_name_target)
         a_norm = normalize_name(api_mall)
         if t_norm and a_norm and (t_norm in a_norm or a_norm in t_norm):
-            logger.debug(f"  [mall_name 매칭] {api_mall} ≈ {mall_name_target}")
+            logger.debug(f"  [4순위 mall_name 매칭] {api_mall} ≈ {mall_name_target}")
             return True
 
     return False
@@ -175,23 +201,26 @@ def find_rank(client_id: str, client_secret: str,
               keyword: str, target_product_id: str,
               max_pages: int = 10,
               catalog_id: str = None,
+              url_product_id: str = None,
               mall_name: str = None) -> dict:
     """
-    특정 키워드에서 특정 상품의 순위를 3중 매칭으로 탐색
+    특정 키워드에서 특정 상품의 순위를 4중 매칭으로 탐색
 
     Args:
-        target_product_id: 스마트스토어 상품 ID or 카탈로그 ID
-        catalog_id: 가격비교 카탈로그 ID (별도 입력 시)
-        mall_name: 스토어명 (fallback 매칭용)
+        target_product_id: URL에서 추출한 숫자 ID
+        catalog_id: 가격비교 카탈로그 ID
+        url_product_id: 스마트스토어 products/{숫자} → API link 필드 매칭용 ★
+        mall_name: 스토어명 (4순위 fallback)
     """
     checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     product = {
         "product_id": str(target_product_id).strip(),
         "catalog_id": str(catalog_id).strip() if catalog_id else None,
+        "url_product_id": str(url_product_id).strip() if url_product_id else None,
         "mall_name": mall_name or "",
     }
 
-    logger.info(f"  탐색: '{keyword}' | PID={product['product_id']} | CatalogID={product['catalog_id']} | Mall={product['mall_name']}")
+    logger.info(f"  탐색: '{keyword}' | PID={product['product_id']} | CatalogID={product['catalog_id']} | UrlPID={product['url_product_id']} | Mall={product['mall_name']}")
 
     for page in range(max_pages):
         start = page * 100 + 1
@@ -208,7 +237,7 @@ def find_rank(client_id: str, client_secret: str,
                 rank = start + idx
                 p_type = item.get("productType", 0)
                 type_label = "가격비교" if p_type == 1 else "일반상품"
-                logger.info(f"  ✅ 발견! 순위={rank}위 | 타입={type_label}(productType={p_type}) | mallName={item.get('mallName','')}")
+                logger.info(f"  ✅ 발견! 순위={rank}위 | 타입={type_label}(productType={p_type}) | mallName={item.get('mallName','')} | apiId={item.get('productId','')}")
                 return {
                     "rank": rank,
                     "product_name": clean_title(item.get("title", "")),
@@ -259,6 +288,7 @@ def track_client(client_id_naver: str, client_secret: str,
                 keyword=kw,
                 target_product_id=product["product_id"],
                 catalog_id=product.get("catalog_id"),
+                url_product_id=product.get("url_product_id"),
                 mall_name=product.get("mall_name", ""),
                 max_pages=max_pages,
             )
