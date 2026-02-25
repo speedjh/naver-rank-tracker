@@ -1,98 +1,950 @@
 {% extends "base.html" %}
-{% block title %}대시보드 - 네이버 순위 트래커{% endblock %}
+{% block title %}순위 트래커{% endblock %}
+
+{% block extra_style %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+/* ════ 레이아웃 ════ */
+.page-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:18px;}
+.page-header h1{font-size:1.3rem;font-weight:800;color:#e2e8f0;margin:0 0 2px;}
+.page-header p{font-size:.78rem;color:#64748b;margin:0;}
+
+/* 스케줄 배지 */
+.sch-badge{display:flex;align-items:center;gap:10px;background:#1a2535;border:1px solid #2d3f5a;border-radius:10px;padding:8px 16px;}
+.sch-dot{width:8px;height:8px;border-radius:50%;background:#03c75a;flex-shrink:0;
+  box-shadow:0 0 0 3px #03c75a33;animation:pulse 1.8s infinite;}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 3px #03c75a33}50%{box-shadow:0 0 0 6px #03c75a11}}
+.sch-info{font-size:.78rem;color:#94a3b8;line-height:1.65;}
+.sch-info strong{color:#e2e8f0;}
+
+/* 추적 배너 */
+.track-banner{background:#03c75a0e;border:1px solid #03c75a44;border-radius:8px;
+  padding:9px 16px;margin-bottom:14px;display:flex;align-items:center;gap:10px;font-size:.84rem;color:#03c75a;}
+
+/* ════ 광고주 탭 바 ════ */
+.client-tabbar{
+  display:flex;align-items:flex-end;gap:4px;
+  border-bottom:2px solid #1e293b;
+  margin-bottom:20px;overflow-x:auto;
+  padding-bottom:0;
+}
+.client-tabbar::-webkit-scrollbar{height:4px;}
+.client-tabbar::-webkit-scrollbar-thumb{background:#334155;border-radius:2px;}
+
+.ctab{
+  display:flex;align-items:center;gap:7px;
+  padding:9px 18px 10px;
+  background:#1a2535;border:1px solid #1e293b;border-bottom:none;
+  border-radius:8px 8px 0 0;
+  font-size:.84rem;font-weight:600;color:#64748b;
+  cursor:pointer;white-space:nowrap;flex-shrink:0;
+  transition:color .15s,background .15s;
+  position:relative;top:2px;
+}
+.ctab:hover{color:#94a3b8;background:#1e293b;}
+.ctab.active{
+  background:#161c2d;color:#e2e8f0;
+  border-color:#334155;
+  border-bottom:2px solid #161c2d;
+  top:2px;
+}
+.ctab .tab-del{
+  background:none;border:none;color:#334155;cursor:pointer;
+  font-size:.78rem;padding:0 0 0 2px;line-height:1;
+}
+.ctab .tab-del:hover{color:#ef4444;}
+
+/* + 새 광고주 버튼 */
+.ctab-add{
+  padding:8px 14px 10px;
+  background:none;border:none;border-bottom:none;
+  color:#334155;font-size:1.1rem;cursor:pointer;
+  border-radius:8px 8px 0 0;
+  transition:color .15s;
+  position:relative;top:2px;
+}
+.ctab-add:hover{color:#03c75a;}
+
+/* 탭 패널 */
+.client-panel{display:none;}
+.client-panel.active{display:block;}
+
+/* 빈 상태 */
+.empty-clients{
+  text-align:center;padding:72px 20px;color:#334155;
+}
+.empty-clients .icon{font-size:3rem;margin-bottom:12px;}
+.empty-clients h3{font-size:1rem;color:#475569;margin:0 0 6px;}
+.empty-clients p{font-size:.83rem;margin:0 0 20px;}
+
+/* ════ 입력 패널 ════ */
+.input-panel{
+  background:#1e2433;border:1px solid #2a3347;
+  border-radius:12px;padding:18px 20px;margin-bottom:18px;
+}
+.input-panel-title{font-size:.7rem;font-weight:700;color:#475569;
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px;}
+.input-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+@media(max-width:600px){.input-grid{grid-template-columns:1fr;}}
+.input-block label{display:block;font-size:.73rem;color:#64748b;margin-bottom:5px;}
+.input-hint{font-size:.69rem;color:#334155;margin-top:3px;}
+
+input[type=text],textarea{
+  background:#0f1117;border:1px solid #334155;color:#e2e8f0;
+  padding:8px 11px;border-radius:7px;font-size:.875rem;
+  width:100%;box-sizing:border-box;transition:border-color .15s;
+}
+input[type=text]:focus,textarea:focus{outline:none;border-color:#03c75a;}
+textarea{resize:vertical;font-family:inherit;}
+
+/* ════ 버튼 ════ */
+.btn{display:inline-flex;align-items:center;gap:5px;
+  padding:8px 16px;border-radius:7px;font-size:.83rem;font-weight:600;
+  border:none;cursor:pointer;transition:background .15s,opacity .15s;}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+.btn-primary{background:#03c75a;color:#000;}
+.btn-primary:hover:not(:disabled){background:#00e065;}
+.btn-secondary{background:#1e293b;color:#94a3b8;border:1px solid #334155;}
+.btn-secondary:hover{background:#263347;color:#e2e8f0;}
+.btn-danger{background:#ef444415;color:#ef4444;border:1px solid #ef444433;}
+.btn-danger:hover{background:#ef444425;}
+.btn-sm{padding:5px 12px;font-size:.77rem;}
+.btn-track{background:#03c75a;color:#000;padding:8px 18px;font-size:.84rem;font-weight:700;border-radius:7px;border:none;cursor:pointer;}
+.btn-track:hover{background:#00e065;}
+.btn-track:disabled{opacity:.5;cursor:not-allowed;}
+
+/* ════ 키워드 태그 ════ */
+.kw-tag{
+  display:inline-flex;align-items:center;gap:5px;
+  background:#1a2535;border:1px solid #334155;
+  border-radius:14px;padding:3px 9px;font-size:.79rem;color:#e2e8f0;
+}
+.kw-del{background:none;border:none;color:#475569;cursor:pointer;font-size:.73rem;padding:0;line-height:1;}
+.kw-del:hover{color:#ef4444;}
+
+/* ════ 순위 테이블 ════ */
+.table-card{background:#161c2d;border:1px solid #1e293b;border-radius:12px;overflow:hidden;}
+.table-card-head{display:flex;align-items:center;justify-content:space-between;
+  padding:13px 18px 11px;border-bottom:1px solid #1e293b;}
+.table-card-head h2{font-size:.88rem;font-weight:700;color:#e2e8f0;margin:0;}
+.table-wrap{overflow-x:auto;}
+table.rtbl{width:100%;border-collapse:collapse;min-width:680px;}
+table.rtbl thead th{
+  padding:8px 13px;font-size:.69rem;color:#475569;text-align:left;
+  text-transform:uppercase;letter-spacing:.04em;
+  border-bottom:1px solid #1e293b;background:#1a2535;white-space:nowrap;
+}
+table.rtbl tbody td{
+  padding:10px 13px;border-bottom:1px solid #1a2535;
+  font-size:.84rem;vertical-align:middle;
+}
+table.rtbl tbody tr:last-child td{border-bottom:none;}
+table.rtbl tbody tr:hover td{background:#1e2a3a;}
+
+/* 순위 뱃지 */
+.rb{display:inline-block;padding:2px 9px;border-radius:20px;font-weight:700;font-size:.8rem;min-width:48px;text-align:center;}
+.rb-top {background:#f59e0b18;color:#f59e0b;border:1px solid #f59e0b44;}
+.rb-good{background:#03c75a18;color:#03c75a;border:1px solid #03c75a44;}
+.rb-mid {background:#3b82f618;color:#3b82f6;border:1px solid #3b82f644;}
+.rb-low {background:#94a3b818;color:#94a3b8;border:1px solid #94a3b844;}
+.rb-none{background:#ef444418;color:#ef4444;border:1px solid #ef444444;}
+
+/* 삭제 버튼 인라인 */
+.del-btn{background:none;border:none;color:#334155;cursor:pointer;font-size:.84rem;padding:2px 6px;border-radius:4px;}
+.del-btn:hover{color:#ef4444;background:#ef444415;}
+
+/* 빈 테이블 */
+.empty-tbl{text-align:center;padding:44px 20px;color:#334155;}
+.empty-tbl .icon{font-size:2.4rem;margin-bottom:8px;}
+
+/* 미니 차트 */
+canvas.mini{display:block;}
+
+/* ════ 모달 ════ */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1000;
+  display:flex;align-items:center;justify-content:center;padding:16px;}
+.modal-box{background:#0f172a;border:1px solid #334155;border-radius:14px;
+  width:100%;max-width:680px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;}
+.modal-head{padding:15px 20px 11px;border-bottom:1px solid #1e293b;
+  display:flex;align-items:center;justify-content:space-between;}
+.modal-body{flex:1;overflow-y:auto;padding:16px 20px;}
+.modal-footer{padding:8px 20px;border-top:1px solid #1e293b;font-size:.71rem;color:#475569;}
+.modal-close{background:none;border:none;color:#64748b;font-size:1.2rem;cursor:pointer;}
+.modal-close:hover{color:#e2e8f0;}
+
+/* 검색 아이템 */
+.sr-item{display:flex;gap:12px;padding:10px 12px;border:1px solid #1e293b;
+  border-radius:8px;margin-bottom:7px;cursor:pointer;transition:border-color .15s;}
+.sr-item:hover{border-color:#03c75a;}
+.sr-info{flex:1;min-width:0;}
+.sr-title{font-size:.81rem;font-weight:600;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px;}
+.sr-meta{font-size:.71rem;color:#64748b;display:flex;gap:7px;flex-wrap:wrap;align-items:center;}
+.bc{background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b55;padding:1px 7px;border-radius:10px;font-size:.69rem;font-weight:700;}
+.bn{background:#3b82f622;color:#3b82f6;border:1px solid #3b82f655;padding:1px 7px;border-radius:10px;font-size:.69rem;}
+.pick-btn{margin-left:auto;flex-shrink:0;background:#03c75a;color:#000;border:none;border-radius:6px;padding:5px 11px;font-size:.74rem;font-weight:700;cursor:pointer;}
+.pick-btn:hover{background:#00e065;}
+
+/* 스피너 */
+.spinner{width:18px;height:18px;border:2px solid #334155;border-top-color:#03c75a;
+  border-radius:50%;animation:spin .6s linear infinite;display:inline-block;}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* 상태 메시지 */
+.status-msg{font-size:.79rem;padding:6px 0;}
+</style>
+{% endblock %}
+
 {% block content %}
 
-<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;">
+<!-- ── 페이지 헤더 ── -->
+<div class="page-header">
   <div>
-    <div class="page-title">📊 광고주 대시보드</div>
-    <div class="page-sub">광고주별 네이버 쇼핑 순위 현황</div>
+    <h1>📊 순위 트래커</h1>
+    <p>네이버 쇼핑 상품 순위 · 광고주별 관리 · 매일 11:00 자동 추적</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+    <div class="sch-badge">
+      <div class="sch-dot"></div>
+      <div class="sch-info">
+        <strong>자동 추적</strong> 매일 11:00 KST<br>
+        다음: <strong style="color:#03c75a;">{{ next_run }}</strong>
+        {% if global_tracking.last_run %} &nbsp;|&nbsp; 마지막: {{ global_tracking.last_run }}{% endif %}
+      </div>
+    </div>
+    <button class="btn-track" id="btnTrackAll" onclick="trackAll()">▶ 전체 추적</button>
   </div>
 </div>
 
-<!-- 광고주 추가 폼 -->
-<div class="card">
-  <div class="card-title">➕ 광고주 추가</div>
-  <form action="/clients/add" method="post">
-    <div class="form-row">
-      <div class="form-group">
-        <label>광고주명 *</label>
-        <input type="text" name="name" placeholder="예: 홍길동스토어" required>
-      </div>
-      <div class="form-group">
-        <label>메모 (선택)</label>
-        <input type="text" name="memo" placeholder="예: 뷰티 브랜드, 3개 상품 관리 중">
-      </div>
-      <div style="align-self:flex-end;">
-        <button type="submit" class="btn btn-primary">추가</button>
-      </div>
-    </div>
-  </form>
-</div>
-
-<!-- 광고주 목록 -->
-{% if clients %}
-<div class="card">
-  <div class="card-title">📋 광고주 목록 ({{ clients|length }}개)</div>
-  <table>
-    <thead>
-      <tr>
-        <th>광고주명</th>
-        <th>메모</th>
-        <th>추적 조합</th>
-        <th>순위권</th>
-        <th>최고순위</th>
-        <th>마지막 확인</th>
-        <th>관리</th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for cl in clients %}
-    {% set s = summary.get(cl.id, {}) %}
-    <tr style="cursor:pointer;" onclick="location.href='/clients/{{ cl.id }}'">
-      <td>
-        <a href="/clients/{{ cl.id }}" style="color:#03c75a;font-weight:700;">{{ cl.name }}</a>
-      </td>
-      <td style="color:#64748b;font-size:.82rem;">{{ cl.memo or '-' }}</td>
-      <td>
-        {% if s.total_combos %}
-          <span class="badge badge-blue">{{ s.total_combos }}건</span>
-        {% else %}
-          <span style="color:#475569">-</span>
-        {% endif %}
-      </td>
-      <td>
-        {% if s.in_rank is not none and s.total_combos %}
-          <span class="badge badge-green">{{ s.in_rank }} / {{ s.total_combos }}</span>
-        {% else %}
-          <span style="color:#475569">-</span>
-        {% endif %}
-      </td>
-      <td>
-        {% if s.best_rank %}
-          <span class="rank-{% if s.best_rank <= 10 %}top{% elif s.best_rank <= 30 %}good{% elif s.best_rank <= 100 %}mid{% else %}low{% endif %}">
-            {{ s.best_rank }}위
-          </span>
-        {% else %}
-          <span style="color:#475569">-</span>
-        {% endif %}
-      </td>
-      <td style="color:#64748b;font-size:.8rem;">{{ s.last_check or '-' }}</td>
-      <td onclick="event.stopPropagation()">
-        <form action="/clients/{{ cl.id }}/delete" method="post" onsubmit="return confirm('광고주 {{ cl.name }}을 삭제할까요? 모든 데이터가 삭제됩니다.')">
-          <button type="submit" class="btn btn-danger btn-sm">삭제</button>
-        </form>
-      </td>
-    </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% else %}
-<div class="card" style="text-align:center;padding:48px;color:#475569;">
-  <div style="font-size:3rem;margin-bottom:12px;">📭</div>
-  <div style="font-size:1rem;margin-bottom:6px;">등록된 광고주가 없습니다.</div>
-  <div style="font-size:.85rem;">위 폼에서 광고주를 추가해보세요!</div>
+{% if global_tracking.running %}
+<div class="track-banner" id="trackBanner">
+  <div class="spinner"></div>
+  <span>순위 추적 중... 완료 후 자동 새로고침됩니다.</span>
 </div>
 {% endif %}
 
+
+<!-- ════════════════════════════════════
+     광고주 탭 바
+════════════════════════════════════ -->
+<div class="client-tabbar" id="clientTabbar">
+  {% for cl in clients %}
+  <button class="ctab {% if loop.first %}active{% endif %}"
+          id="ctab_{{ cl.id }}"
+          onclick="showClient({{ cl.id }})">
+    🏪 {{ cl.name }}
+    <span class="tab-del" onclick="event.stopPropagation();deleteClient({{ cl.id }},'{{ cl.name }}')" title="삭제">✕</span>
+  </button>
+  {% endfor %}
+  <button class="ctab-add" onclick="openAddClientModal()" title="광고주 추가">＋</button>
+</div>
+
+
+<!-- ════════════════════════════════════
+     광고주 없을 때
+════════════════════════════════════ -->
+{% if not clients %}
+<div class="empty-clients" id="emptyState">
+  <div class="icon">🏢</div>
+  <h3>등록된 광고주가 없습니다</h3>
+  <p>상단의 ＋ 버튼을 눌러 첫 번째 광고주를 추가해보세요.</p>
+  <button class="btn btn-primary" onclick="openAddClientModal()">＋ 광고주 추가</button>
+</div>
+{% endif %}
+
+
+<!-- ════════════════════════════════════
+     광고주 패널 (서버 렌더)
+════════════════════════════════════ -->
+{% for cl in clients %}
+<div class="client-panel {% if loop.first %}active{% endif %}" id="cpanel_{{ cl.id }}">
+
+  <!-- ── 입력 패널 ── -->
+  <div class="input-panel">
+    <div class="input-panel-title">➕ {{ cl.name }} 상품 · 키워드 등록</div>
+    <div class="input-grid">
+
+      <!-- 상품 URL -->
+      <div class="input-block">
+        <label>상품 URL <span style="font-weight:400;color:#475569;">스마트스토어 또는 가격비교 URL</span></label>
+        <div style="display:flex;gap:7px;">
+          <input type="text" id="url_{{ cl.id }}"
+            placeholder="https://smartstore.naver.com/...">
+          <button class="btn btn-secondary btn-sm" style="white-space:nowrap;"
+            onclick="openSearchModal({{ cl.id }})">🔍</button>
+        </div>
+        <input type="text" id="alias_{{ cl.id }}"
+          placeholder="상품 별칭 (선택)" style="margin-top:7px;">
+        <div class="input-hint">별칭을 입력하면 테이블에 짧게 표시됩니다.</div>
+      </div>
+
+      <!-- 키워드 -->
+      <div class="input-block">
+        <label>키워드 <span style="font-weight:400;color:#475569;">쉼표·줄바꿈으로 다중 입력</span></label>
+        <textarea id="kw_{{ cl.id }}" rows="2"
+          placeholder="장뇌삼&#10;산양삼, 산양산삼"></textarea>
+        <div class="input-hint">여러 키워드를 한번에 입력할 수 있습니다.</div>
+      </div>
+
+    </div>
+
+    <!-- 버튼 행 -->
+    <div style="display:flex;gap:9px;margin-top:13px;flex-wrap:wrap;align-items:center;">
+      <button class="btn btn-primary btn-sm" onclick="submitProduct({{ cl.id }})">📦 상품 추가</button>
+      <button class="btn btn-secondary btn-sm" onclick="submitKeywords({{ cl.id }})">🔑 키워드 추가</button>
+      <span class="status-msg" id="st_{{ cl.id }}"></span>
+    </div>
+
+    <!-- 등록된 키워드 태그 -->
+    <div id="kwtags_{{ cl.id }}" style="margin-top:12px;{% if not client_data[cl.id].keywords %}display:none;{% endif %}">
+      <div style="font-size:.69rem;color:#475569;margin-bottom:7px;text-transform:uppercase;letter-spacing:.04em;">등록된 키워드</div>
+      <div id="kwtaglist_{{ cl.id }}" style="display:flex;flex-wrap:wrap;gap:6px;">
+        {% for kw in client_data[cl.id].keywords %}
+        <span class="kw-tag" id="kwtag_{{ kw.id }}">
+          {{ kw.keyword }}
+          <button class="kw-del" onclick="deleteKeyword({{ cl.id }},{{ kw.id }},this)">✕</button>
+        </span>
+        {% endfor %}
+      </div>
+    </div>
+
+  </div><!-- /input-panel -->
+
+
+  <!-- ── 순위 테이블 ── -->
+  <div class="table-card">
+    <div class="table-card-head">
+      <h2>📋 순위 현황 <span style="font-size:.76rem;color:#475569;font-weight:400;">— {{ cl.name }}</span></h2>
+      <span style="font-size:.74rem;color:#475569;" id="rowcnt_{{ cl.id }}">
+        {{ client_data[cl.id].rows|length }}개 조합
+      </span>
+    </div>
+
+    {% set rows = client_data[cl.id].rows %}
+    {% if rows %}
+    <div class="table-wrap" id="tblwrap_{{ cl.id }}">
+      <table class="rtbl" id="tbl_{{ cl.id }}">
+        <thead>
+          <tr>
+            <th style="width:190px;">상품명</th>
+            <th>키워드</th>
+            <th style="width:90px;text-align:center;">순위</th>
+            <th style="width:90px;">가격</th>
+            <th style="width:130px;">확인 시각</th>
+            <th style="width:110px;">추이</th>
+            <th style="width:46px;"></th>
+          </tr>
+        </thead>
+        <tbody id="tbody_{{ cl.id }}">
+        {% set ns = namespace(prev_pid=None) %}
+        {% for r in rows %}
+          <tr id="tr_{{ r.pid }}_{{ r.kid }}">
+            <td>
+              {% if r.pid != ns.prev_pid %}
+              <a href="{{ r.product_url }}" target="_blank"
+                 style="color:#e2e8f0;font-weight:600;font-size:.84rem;text-decoration:none;"
+                 title="{{ r.product_url }}">
+                {{ r.product_name or (r.product_url[:26] ~ '...') }}
+              </a>
+              <div style="font-size:.7rem;color:#334155;margin-top:1px;">ID: {{ r.product_id or '-' }}</div>
+              {% set ns.prev_pid = r.pid %}
+              {% else %}
+              <span style="color:#2d3f5a;font-size:.76rem;">↑ 동일 상품</span>
+              {% endif %}
+            </td>
+            <td>
+              <span class="kw-tag" style="background:transparent;border-color:#2d3f5a;">{{ r.keyword }}</span>
+            </td>
+            <td style="text-align:center;">
+              {% if r.rank %}
+                <span class="rb rb-{% if r.rank<=10 %}top{% elif r.rank<=30 %}good{% elif r.rank<=100 %}mid{% else %}low{% endif %}">
+                  {{ r.rank }}위{% if r.rank<=3 %} 🥇{% elif r.rank<=10 %} 🔥{% endif %}
+                </span>
+              {% elif r.checked_at %}
+                <span class="rb rb-none">1000위↓</span>
+              {% else %}
+                <span style="color:#334155;font-size:.77rem;">미추적</span>
+              {% endif %}
+            </td>
+            <td style="color:#94a3b8;font-size:.81rem;">
+              {{ '{:,}'.format(r.lprice)~'원' if r.lprice else '-' }}
+            </td>
+            <td style="color:#475569;font-size:.76rem;">
+              {{ r.checked_at[:16] if r.checked_at else '-' }}
+            </td>
+            <td style="width:110px;">
+              {% if r.product_id and r.keyword and r.keyword != '—' %}
+              <canvas class="mini" id="mc_{{ r.pid }}_{{ r.kid }}" width="110" height="36"
+                data-pid="{{ r.product_id }}" data-kw="{{ r.keyword }}"></canvas>
+              {% endif %}
+            </td>
+            <td style="text-align:center;">
+              <button class="del-btn" title="상품 삭제"
+                onclick="deleteProduct({{ cl.id }},{{ r.pid }})">🗑</button>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% else %}
+    <div class="empty-tbl" id="emptytbl_{{ cl.id }}">
+      <div class="icon">📭</div>
+      <div style="font-size:.88rem;color:#475569;margin-bottom:4px;">등록된 상품이 없습니다.</div>
+      <div style="font-size:.8rem;color:#334155;">위에서 상품 URL과 키워드를 입력해주세요.</div>
+    </div>
+    {% endif %}
+
+  </div><!-- /table-card -->
+
+</div><!-- /client-panel -->
+{% endfor %}
+
+
+<!-- ════════════════════════════════════
+     모달: 광고주 추가
+════════════════════════════════════ -->
+<div id="addClientModal" class="modal-overlay" style="display:none;"
+  onclick="if(event.target.id==='addClientModal')closeAddClientModal()">
+  <div class="modal-box" style="max-width:380px;">
+    <div class="modal-head">
+      <div style="font-weight:700;color:#e2e8f0;">🏢 광고주 추가</div>
+      <button class="modal-close" onclick="closeAddClientModal()">✕</button>
+    </div>
+    <div class="modal-body" style="padding:20px;">
+      <label style="font-size:.78rem;color:#64748b;display:block;margin-bottom:6px;">광고주 이름</label>
+      <input type="text" id="newClientName" placeholder="예: 도담산삼, 글로웰코어"
+        onkeydown="if(event.key==='Enter')submitAddClient()">
+      <div style="margin-top:14px;display:flex;gap:9px;justify-content:flex-end;">
+        <button class="btn btn-secondary btn-sm" onclick="closeAddClientModal()">취소</button>
+        <button class="btn btn-primary btn-sm" onclick="submitAddClient()">추가</button>
+      </div>
+      <div class="status-msg" id="clientAddStatus"></div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ════════════════════════════════════
+     모달: 상품 검색
+════════════════════════════════════ -->
+<div id="searchModal" class="modal-overlay" style="display:none;"
+  onclick="if(event.target.id==='searchModal')closeSearchModal()">
+  <div class="modal-box">
+    <div class="modal-head">
+      <div>
+        <div style="font-weight:700;color:#e2e8f0;">🔍 키워드로 내 상품 찾기</div>
+        <div style="font-size:.72rem;color:#64748b;margin-top:2px;">선택하면 URL이 자동 입력됩니다</div>
+      </div>
+      <button class="modal-close" onclick="closeSearchModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;gap:8px;margin-bottom:13px;">
+        <input type="text" id="srKw" placeholder="검색 키워드 (예: 장뇌삼)" style="flex:1;"
+          onkeydown="if(event.key==='Enter')doSearch(1)">
+        <button class="btn btn-primary btn-sm" onclick="doSearch(1)" style="white-space:nowrap;">검색</button>
+      </div>
+      <div id="srLoading" style="display:none;text-align:center;padding:20px;color:#64748b;">
+        <div class="spinner" style="margin:0 auto 8px;"></div>검색 중...
+      </div>
+      <div id="srResults"></div>
+      <div id="srPaging" style="display:flex;gap:6px;justify-content:center;margin-top:10px;"></div>
+    </div>
+    <div class="modal-footer">
+      💡 <strong style="color:#f59e0b;">🏷 가격비교</strong> = 카탈로그 &nbsp;|&nbsp;
+      <strong style="color:#3b82f6;">📦 일반</strong> = 스마트스토어
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+
+{% block extra_script %}
+<script>
+// ══════════════════════════════════════════
+// 상태 변수
+// ══════════════════════════════════════════
+let currentSearchCid = null;   // 검색 모달이 어느 광고주용인지
+
+// ══════════════════════════════════════════
+// 탭 전환
+// ══════════════════════════════════════════
+function showClient(cid) {
+  document.querySelectorAll('.client-panel').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.ctab').forEach(el => el.classList.remove('active'));
+  const panel = document.getElementById('cpanel_' + cid);
+  const tab   = document.getElementById('ctab_'   + cid);
+  if (panel) panel.classList.add('active');
+  if (tab)   tab.classList.add('active');
+}
+
+// ══════════════════════════════════════════
+// 상태 메시지
+// ══════════════════════════════════════════
+function setStatus(cid, msg, color='#64748b') {
+  const el = document.getElementById('st_' + cid);
+  if (el) { el.textContent = msg; el.style.color = color; }
+}
+
+// ══════════════════════════════════════════
+// 광고주 추가 모달
+// ══════════════════════════════════════════
+function openAddClientModal() {
+  document.getElementById('addClientModal').style.display = 'flex';
+  setTimeout(() => document.getElementById('newClientName').focus(), 80);
+}
+function closeAddClientModal() {
+  document.getElementById('addClientModal').style.display = 'none';
+  document.getElementById('newClientName').value = '';
+  document.getElementById('clientAddStatus').textContent = '';
+}
+
+async function submitAddClient() {
+  const name = document.getElementById('newClientName').value.trim();
+  if (!name) { alert('광고주 이름을 입력해주세요.'); return; }
+
+  const fd = new FormData();
+  fd.append('name', name);
+  const res  = await fetch('/clients/add', { method: 'POST', body: fd });
+  const data = await res.json();
+  if (data.error) {
+    document.getElementById('clientAddStatus').textContent = '❌ ' + data.error;
+    return;
+  }
+  // 탭 + 패널 동적 추가
+  addClientTab(data.id, data.name);
+  closeAddClientModal();
+  // 빈 상태 숨기기
+  const empty = document.getElementById('emptyState');
+  if (empty) empty.style.display = 'none';
+}
+
+function addClientTab(cid, name) {
+  // 탭 버튼 삽입
+  const tabbar = document.getElementById('clientTabbar');
+  const addBtn = tabbar.querySelector('.ctab-add');
+  const tab    = document.createElement('button');
+  tab.className   = 'ctab';
+  tab.id          = 'ctab_' + cid;
+  tab.innerHTML   = `🏪 ${name} <span class="tab-del" onclick="event.stopPropagation();deleteClient(${cid},'${name}')" title="삭제">✕</span>`;
+  tab.onclick     = () => showClient(cid);
+  tabbar.insertBefore(tab, addBtn);
+
+  // 패널 추가
+  const panels = document.getElementById('clientTabbar').parentNode;
+  const panel  = document.createElement('div');
+  panel.className = 'client-panel';
+  panel.id        = 'cpanel_' + cid;
+  panel.innerHTML = buildPanelHTML(cid, name);
+  // 탭바 다음에 삽입
+  const lastPanel = document.querySelector('.client-panel:last-of-type');
+  if (lastPanel) {
+    lastPanel.insertAdjacentElement('afterend', panel);
+  } else {
+    tabbar.insertAdjacentElement('afterend', panel);
+  }
+  showClient(cid);
+}
+
+function buildPanelHTML(cid, name) {
+  return `
+  <div class="input-panel">
+    <div class="input-panel-title">➕ ${name} 상품 · 키워드 등록</div>
+    <div class="input-grid">
+      <div class="input-block">
+        <label>상품 URL <span style="font-weight:400;color:#475569;">스마트스토어 또는 가격비교 URL</span></label>
+        <div style="display:flex;gap:7px;">
+          <input type="text" id="url_${cid}" placeholder="https://smartstore.naver.com/...">
+          <button class="btn btn-secondary btn-sm" style="white-space:nowrap;" onclick="openSearchModal(${cid})">🔍</button>
+        </div>
+        <input type="text" id="alias_${cid}" placeholder="상품 별칭 (선택)" style="margin-top:7px;">
+      </div>
+      <div class="input-block">
+        <label>키워드 <span style="font-weight:400;color:#475569;">쉼표·줄바꿈으로 다중 입력</span></label>
+        <textarea id="kw_${cid}" rows="2" placeholder="장뇌삼&#10;산양삼, 산양산삼"></textarea>
+      </div>
+    </div>
+    <div style="display:flex;gap:9px;margin-top:13px;flex-wrap:wrap;align-items:center;">
+      <button class="btn btn-primary btn-sm" onclick="submitProduct(${cid})">📦 상품 추가</button>
+      <button class="btn btn-secondary btn-sm" onclick="submitKeywords(${cid})">🔑 키워드 추가</button>
+      <span class="status-msg" id="st_${cid}"></span>
+    </div>
+    <div id="kwtags_${cid}" style="display:none;margin-top:12px;">
+      <div style="font-size:.69rem;color:#475569;margin-bottom:7px;text-transform:uppercase;letter-spacing:.04em;">등록된 키워드</div>
+      <div id="kwtaglist_${cid}" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+    </div>
+  </div>
+  <div class="table-card">
+    <div class="table-card-head">
+      <h2>📋 순위 현황 <span style="font-size:.76rem;color:#475569;font-weight:400;">— ${name}</span></h2>
+      <span style="font-size:.74rem;color:#475569;" id="rowcnt_${cid}">0개 조합</span>
+    </div>
+    <div class="empty-tbl" id="emptytbl_${cid}">
+      <div class="icon">📭</div>
+      <div style="font-size:.88rem;color:#475569;margin-bottom:4px;">등록된 상품이 없습니다.</div>
+      <div style="font-size:.8rem;color:#334155;">위에서 상품 URL과 키워드를 입력해주세요.</div>
+    </div>
+    <div class="table-wrap" id="tblwrap_${cid}" style="display:none;">
+      <table class="rtbl" id="tbl_${cid}">
+        <thead><tr>
+          <th style="width:190px;">상품명</th><th>키워드</th>
+          <th style="width:90px;text-align:center;">순위</th>
+          <th style="width:90px;">가격</th>
+          <th style="width:130px;">확인 시각</th>
+          <th style="width:110px;">추이</th>
+          <th style="width:46px;"></th>
+        </tr></thead>
+        <tbody id="tbody_${cid}"></tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+// ══════════════════════════════════════════
+// 광고주 삭제
+// ══════════════════════════════════════════
+async function deleteClient(cid, name) {
+  if (!confirm(`"${name}" 광고주를 삭제하면 모든 상품·키워드·순위 데이터가 삭제됩니다.\n계속할까요?`)) return;
+  const res  = await fetch(`/clients/${cid}/delete`, { method: 'POST' });
+  const data = await res.json();
+  if (!data.ok) { alert('삭제 실패'); return; }
+  document.getElementById('ctab_'   + cid)?.remove();
+  document.getElementById('cpanel_' + cid)?.remove();
+  // 남은 첫 탭 활성화
+  const firstTab = document.querySelector('.ctab');
+  if (firstTab) {
+    const id = firstTab.id.replace('ctab_', '');
+    showClient(parseInt(id));
+  } else {
+    // 광고주 없으면 빈 상태
+    let empty = document.getElementById('emptyState');
+    if (!empty) {
+      empty = document.createElement('div');
+      empty.id = 'emptyState';
+      empty.className = 'empty-clients';
+      empty.innerHTML = `<div class="icon">🏢</div><h3>등록된 광고주가 없습니다</h3><p>상단의 ＋ 버튼을 눌러 광고주를 추가해보세요.</p><button class="btn btn-primary" onclick="openAddClientModal()">＋ 광고주 추가</button>`;
+      document.getElementById('clientTabbar').insertAdjacentElement('afterend', empty);
+    }
+    empty.style.display = 'block';
+  }
+}
+
+// ══════════════════════════════════════════
+// 상품 추가
+// ══════════════════════════════════════════
+async function submitProduct(cid) {
+  const url   = document.getElementById('url_'  + cid)?.value.trim();
+  const alias = document.getElementById('alias_'+ cid)?.value.trim();
+  if (!url) { setStatus(cid, '❌ 상품 URL을 입력해주세요.', '#ef4444'); return; }
+  setStatus(cid, '상품 추가 중...', '#64748b');
+
+  const fd = new FormData();
+  fd.append('product_url',  url);
+  fd.append('product_name', alias);
+  try {
+    const res  = await fetch(`/clients/${cid}/products/add`, { method:'POST', body:fd });
+    const data = await res.json();
+    if (data.error) { setStatus(cid, '❌ ' + data.error, '#ef4444'); return; }
+    setStatus(cid, '✅ 상품이 추가되었습니다!', '#03c75a');
+    document.getElementById('url_'  + cid).value = '';
+    document.getElementById('alias_'+ cid).value = '';
+    addProductRow(cid, data);
+    setTimeout(() => setStatus(cid, ''), 3000);
+  } catch(e) {
+    setStatus(cid, '❌ 오류: ' + e.message, '#ef4444');
+  }
+}
+
+function addProductRow(cid, data) {
+  // 빈 상태 숨기기
+  const empty = document.getElementById('emptytbl_' + cid);
+  if (empty) empty.style.display = 'none';
+  const wrap = document.getElementById('tblwrap_' + cid);
+  if (wrap) wrap.style.display = 'block';
+
+  // 키워드 목록 가져오기
+  const tagList = document.getElementById('kwtaglist_' + cid);
+  const tags    = tagList ? tagList.querySelectorAll('.kw-tag') : [];
+  const tbody   = document.getElementById('tbody_' + cid);
+  if (!tbody) return;
+
+  if (tags.length === 0) {
+    // 키워드 없으면 단독 행
+    const tr = document.createElement('tr');
+    tr.id = `tr_${data.pid}_none`;
+    tr.innerHTML = `
+      <td><a href="${data.product_url}" target="_blank"
+           style="color:#e2e8f0;font-weight:600;font-size:.84rem;text-decoration:none;">
+        ${data.product_name}</a>
+        <div style="font-size:.7rem;color:#334155;margin-top:1px;">ID: ${data.product_id}</div>
+      </td>
+      <td><span class="kw-tag" style="background:transparent;border-color:#2d3f5a;">—</span></td>
+      <td style="text-align:center;"><span style="color:#334155;font-size:.77rem;">미추적</span></td>
+      <td style="color:#94a3b8;font-size:.81rem;">-</td>
+      <td style="color:#475569;font-size:.76rem;">-</td>
+      <td></td>
+      <td style="text-align:center;"><button class="del-btn" onclick="deleteProduct(${cid},${data.pid})">🗑</button></td>
+    `;
+    tbody.appendChild(tr);
+  } else {
+    // 키워드 수만큼 행 추가
+    tags.forEach((tag, i) => {
+      const kw  = tag.childNodes[0].textContent.trim();
+      const tr  = document.createElement('tr');
+      tr.id = `tr_${data.pid}_kw_${i}`;
+      tr.innerHTML = `
+        <td>${i===0 ? `<a href="${data.product_url}" target="_blank"
+             style="color:#e2e8f0;font-weight:600;font-size:.84rem;text-decoration:none;">
+          ${data.product_name}</a>
+          <div style="font-size:.7rem;color:#334155;margin-top:1px;">ID: ${data.product_id}</div>`
+          : `<span style="color:#2d3f5a;font-size:.76rem;">↑ 동일 상품</span>`}
+        </td>
+        <td><span class="kw-tag" style="background:transparent;border-color:#2d3f5a;">${kw}</span></td>
+        <td style="text-align:center;"><span style="color:#334155;font-size:.77rem;">미추적</span></td>
+        <td style="color:#94a3b8;font-size:.81rem;">-</td>
+        <td style="color:#475569;font-size:.76rem;">-</td>
+        <td></td>
+        <td style="text-align:center;">${i===0 ? `<button class="del-btn" onclick="deleteProduct(${cid},${data.pid})">🗑</button>` : ''}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+  // 행 수 업데이트
+  updateRowCount(cid);
+}
+
+function updateRowCount(cid) {
+  const tbody = document.getElementById('tbody_' + cid);
+  const cnt   = document.getElementById('rowcnt_' + cid);
+  if (tbody && cnt) cnt.textContent = tbody.querySelectorAll('tr').length + '개 조합';
+}
+
+// ══════════════════════════════════════════
+// 상품 삭제
+// ══════════════════════════════════════════
+async function deleteProduct(cid, pid) {
+  if (!confirm('이 상품을 삭제할까요?')) return;
+  const res  = await fetch(`/clients/${cid}/products/${pid}/delete`, { method:'POST' });
+  const data = await res.json();
+  if (!data.ok) { alert('삭제 실패'); return; }
+  // 관련 tr 모두 제거
+  document.querySelectorAll(`tr[id^="tr_${pid}_"]`).forEach(tr => tr.remove());
+  updateRowCount(cid);
+  // 행이 없으면 빈 상태 표시
+  const tbody = document.getElementById('tbody_' + cid);
+  if (tbody && tbody.querySelectorAll('tr').length === 0) {
+    const wrap = document.getElementById('tblwrap_' + cid);
+    if (wrap) wrap.style.display = 'none';
+    const empty = document.getElementById('emptytbl_' + cid);
+    if (empty) empty.style.display = 'block';
+  }
+}
+
+// ══════════════════════════════════════════
+// 키워드 추가
+// ══════════════════════════════════════════
+async function submitKeywords(cid) {
+  const raw = document.getElementById('kw_' + cid)?.value.trim();
+  if (!raw) { setStatus(cid, '❌ 키워드를 입력해주세요.', '#ef4444'); return; }
+  setStatus(cid, '키워드 추가 중...', '#64748b');
+
+  const fd = new FormData();
+  fd.append('keyword', raw);
+  try {
+    const res  = await fetch(`/clients/${cid}/keywords/add`, { method:'POST', body:fd });
+    const data = await res.json();
+    if (data.error) { setStatus(cid, '❌ ' + data.error, '#ef4444'); return; }
+
+    // 태그 DOM 추가
+    const tagArea = document.getElementById('kwtags_'   + cid);
+    const tagList = document.getElementById('kwtaglist_'+ cid);
+    if (tagArea) tagArea.style.display = 'block';
+    data.added.forEach(kw => {
+      const kid = data.kid_map[kw] || 0;
+      const span = document.createElement('span');
+      span.className = 'kw-tag';
+      span.id = 'kwtag_' + kid;
+      span.innerHTML = `${kw}<button class="kw-del" onclick="deleteKeyword(${cid},${kid},this)">✕</button>`;
+      if (tagList) tagList.appendChild(span);
+    });
+
+    document.getElementById('kw_' + cid).value = '';
+    setStatus(cid, `✅ "${data.added.join(', ')}" 추가됨!`, '#03c75a');
+    setTimeout(() => setStatus(cid, ''), 3000);
+  } catch(e) {
+    setStatus(cid, '❌ 오류: ' + e.message, '#ef4444');
+  }
+}
+
+// ══════════════════════════════════════════
+// 키워드 삭제
+// ══════════════════════════════════════════
+async function deleteKeyword(cid, kid, btn) {
+  btn.disabled = true;
+  try {
+    const res  = await fetch(`/clients/${cid}/keywords/${kid}/delete`, { method:'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      document.getElementById('kwtag_' + kid)?.remove();
+      // 태그 없으면 영역 숨기기
+      const tagList = document.getElementById('kwtaglist_' + cid);
+      if (tagList && tagList.querySelectorAll('.kw-tag').length === 0) {
+        document.getElementById('kwtags_' + cid).style.display = 'none';
+      }
+    }
+  } catch(e) {
+    btn.disabled = false;
+  }
+}
+
+// ══════════════════════════════════════════
+// 전체 추적
+// ══════════════════════════════════════════
+async function trackAll() {
+  const btn = document.getElementById('btnTrackAll');
+  if (!confirm('전체 광고주 순위 추적을 시작할까요?')) return;
+  btn.disabled = true;
+  try {
+    const res  = await fetch('/track/now', { method:'POST' });
+    const data = await res.json();
+    if (data.error) { alert(data.error); btn.disabled = false; return; }
+    // 배너 표시
+    let banner = document.getElementById('trackBanner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'trackBanner';
+      banner.className = 'track-banner';
+      banner.innerHTML = '<div class="spinner"></div><span>순위 추적 중... 완료 후 자동 새로고침됩니다.</span>';
+      document.querySelector('.page-header').insertAdjacentElement('afterend', banner);
+    }
+    banner.style.display = 'flex';
+    // 폴링
+    const poll = setInterval(async () => {
+      try {
+        const d = await fetch('/track/status').then(r => r.json());
+        if (!d.running) {
+          clearInterval(poll);
+          location.reload();
+        }
+      } catch(e) {}
+    }, 4000);
+  } catch(e) {
+    btn.disabled = false;
+    alert('오류: ' + e.message);
+  }
+}
+
+// 초기 추적 중이면 폴링
+{% if global_tracking.running %}
+const initPoll = setInterval(async () => {
+  try {
+    const d = await fetch('/track/status').then(r => r.json());
+    if (!d.running) { clearInterval(initPoll); location.reload(); }
+  } catch(e) {}
+}, 4000);
+{% endif %}
+
+// ══════════════════════════════════════════
+// 상품 검색 모달
+// ══════════════════════════════════════════
+function openSearchModal(cid) {
+  currentSearchCid = cid;
+  document.getElementById('searchModal').style.display = 'flex';
+  document.getElementById('srResults').innerHTML = '';
+  document.getElementById('srPaging').innerHTML  = '';
+  setTimeout(() => document.getElementById('srKw').focus(), 80);
+}
+function closeSearchModal() {
+  document.getElementById('searchModal').style.display = 'none';
+  currentSearchCid = null;
+}
+
+async function doSearch(page) {
+  const kw = document.getElementById('srKw').value.trim();
+  if (!kw) { alert('키워드를 입력하세요.'); return; }
+  document.getElementById('srLoading').style.display = 'block';
+  document.getElementById('srResults').innerHTML    = '';
+  document.getElementById('srPaging').innerHTML     = '';
+
+  try {
+    const data = await fetch(`/api/search-products?q=${encodeURIComponent(kw)}&page=${page}`).then(r => r.json());
+    document.getElementById('srLoading').style.display = 'none';
+    if (data.error) {
+      document.getElementById('srResults').innerHTML = `<p style="color:#ef4444;text-align:center;padding:16px;">${data.error}</p>`;
+      return;
+    }
+    const html = (data.items||[]).map(item => {
+      const badge = item.isCatalog
+        ? `<span class="bc">🏷 가격비교</span>`
+        : `<span class="bn">📦 일반</span>`;
+      const price = item.lprice ? `${item.lprice.toLocaleString()}원~` : '';
+      const img   = item.image
+        ? `<img src="${item.image}" onerror="this.style.display='none'" style="width:50px;height:50px;object-fit:cover;border-radius:6px;flex-shrink:0;">`
+        : `<div style="width:50px;height:50px;background:#1e293b;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0;">🛒</div>`;
+      const safeItem = JSON.stringify(item).replace(/'/g,"&#39;");
+      return `<div class="sr-item">
+        ${img}
+        <div class="sr-info">
+          <div class="sr-title">[${item.rank}위] ${item.title}</div>
+          <div class="sr-meta">${badge}<span>${item.mallName}</span>${price?`<span style="color:#03c75a;font-weight:600">${price}</span>`:''}</div>
+        </div>
+        <button class="pick-btn" onclick='pickProduct(${safeItem})'>선택</button>
+      </div>`;
+    }).join('') || '<p style="color:#64748b;text-align:center;padding:24px;">검색 결과 없음</p>';
+
+    document.getElementById('srResults').innerHTML = html;
+
+    const maxP = Math.min(Math.ceil((data.total||0)/20), 10);
+    if (maxP > 1) {
+      document.getElementById('srPaging').innerHTML = Array.from({length:maxP},(_,i) =>
+        `<button onclick="doSearch(${i+1})"
+          style="background:${i+1===page?'#03c75a':'#1e293b'};color:${i+1===page?'#000':'#94a3b8'};
+                 border:1px solid #334155;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:.8rem;">${i+1}</button>`
+      ).join('');
+    }
+  } catch(e) {
+    document.getElementById('srLoading').style.display = 'none';
+    document.getElementById('srResults').innerHTML = `<p style="color:#ef4444;text-align:center;padding:16px;">오류: ${e.message}</p>`;
+  }
+}
+
+function pickProduct(item) {
+  if (!currentSearchCid) return;
+  const urlEl   = document.getElementById('url_'  + currentSearchCid);
+  const aliasEl = document.getElementById('alias_'+ currentSearchCid);
+  if (urlEl)   urlEl.value   = item.addUrl || item.link || '';
+  if (aliasEl) aliasEl.value = (item.title||'').replace(/<[^>]+>/g,'').substring(0,30);
+  closeSearchModal();
+  setStatus(currentSearchCid, '✅ 상품 선택됨. "상품 추가" 버튼을 눌러 등록하세요.', '#03c75a');
+}
+
+// ══════════════════════════════════════════
+// 미니 차트
+// ══════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('canvas.mini').forEach(async canvas => {
+    const pid = canvas.dataset.pid;
+    const kw  = canvas.dataset.kw;
+    if (!pid || !kw || kw==='—') return;
+    try {
+      const data = await fetch(`/api/history?pid=${encodeURIComponent(pid)}&kw=${encodeURIComponent(kw)}`).then(r=>r.json());
+      if (!data.length) return;
+      new Chart(canvas, {
+        type:'line',
+        data:{
+          labels: data.map(d=>d.date.slice(5,10)),
+          datasets:[{ data:data.map(d=>d.rank), borderColor:'#03c75a', borderWidth:1.5,
+            pointRadius:0, tension:0.3, fill:false, spanGaps:true }]
+        },
+        options:{
+          responsive:false, animation:false,
+          scales:{x:{display:false},y:{display:false,reverse:true}},
+          plugins:{legend:{display:false},tooltip:{enabled:false}}
+        }
+      });
+    } catch(e){}
+  });
+});
+</script>
 {% endblock %}
