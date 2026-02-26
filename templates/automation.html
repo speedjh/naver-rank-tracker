@@ -1221,6 +1221,12 @@ function renderPlaceOrderTable(){
   const badge = document.getElementById('placeRowCountBadge');
   badge.textContent = `${placeOrderRows.length}건`;
 
+  // 데이터가 로드되면 이전 경고 문구 자동 초기화
+  if(placeOrderRows.length > 0){
+    const _st = document.getElementById('autoFetchSpotStatus');
+    if(_st && _st.textContent.includes('주문 데이터')) _st.textContent = '';
+  }
+
   tbody.innerHTML = placeOrderRows.map((r,i)=>`
     <tr>
       <td><input type="checkbox" id="place-cb-${i}" class="place-row-chk" checked></td>
