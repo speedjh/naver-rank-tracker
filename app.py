@@ -21,6 +21,15 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "naver_rank_agency_2025")
 
+# ── 캐시 방지: HTML 페이지는 항상 최신 버전 서빙 ──
+@app.after_request
+def no_cache(response):
+    if "text/html" in response.content_type:
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"]        = "no-cache"
+        response.headers["Expires"]       = "0"
+    return response
+
 tracking_status = {}
 global_tracking = {"running": False, "last_run": None}
 
