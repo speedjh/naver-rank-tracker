@@ -1198,6 +1198,11 @@ function parsePlacePaste(){
       if(m) placeOrderRows[i].pid = m[1];
     }
   });
+
+  // 플레이스 URL 파싱 완료 후 명소 자동 추출 실행
+  if(placeOrderRows.length > 0 && placeOrderRows[0].url){
+    setTimeout(() => autoFetchSpot(), 600);
+  }
 }
 
 function loadPlaceDemo(){
