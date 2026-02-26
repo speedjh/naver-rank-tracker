@@ -295,8 +295,22 @@ input[type=number]{background:#0d1220 !important;color:#e2e8f0 !important;border
       <div style="margin-top:12px;">
         <div class="panel-title">미션내용 템플릿</div>
         <div class="mission-tpl-wrap">
-          <textarea id="missionTpl">네이버에서 [{keyword}]로 검색하신 후, {blurred_name} 상품을 찾아 구매하고 정답란에 주문번호 앞 5자리를 입력해주세요. 판매처: {store_name}</textarea>
-          <div class="tpl-hint">변수: {keyword} 해당 행 키워드 · {blurred_name} 블러 처리된 상품명 · {store_name} 업체명</div>
+          <textarea id="missionTpl">미션 수행하며,
+리워드 즉시 적립 받으세요!
+
+1. 하단 [검색어 복사하기] 버튼을 클릭 하고, 키워드를 복사해주세요.
+2. [힌트 보기] 버튼을 클릭해서 네이버에 접속해주세요.
+3. 복사된 키워드를 검색 창에 붙여 넣고 검색해주세요.
+4. 아래 상품을 클릭 해주세요.
+
+{blurred_name}
+ ( '광고' 클릭 절대 금지 )
+
+ ▶판매처 : {store_name}
+
+ 5. 상세페이지 하단 구매 추가정보에서 상품번호 뒤 5자리를
+ 아래 정답란에 입력 후 제출해주세요.</textarea>
+          <div class="tpl-hint">변수: {keyword} 해당 행 키워드 · {blurred_name} 첫단어 유지+블러 처리된 상품명 · {store_name} 스토어명(자동조회)</div>
         </div>
       </div>
 
@@ -632,12 +646,13 @@ function parsePaste(){
   renderOrderTable();
   document.getElementById('orderPaste').value = '';
 
-  // M열 스토어명 비동기 조회
+  // M열 스토어명 비동기 조회 — keyword 함께 전달해 mallName 정확도 향상
   parsed.forEach((row, idx) => {
     const slug = extractSlug(row.url);
     if(slug){
-      row.store = slug;
-      fetchStoreName(slug, row.pid, idx);
+      row.store = slug;   // 우선 slug로 초기화, API 응답 후 교체됨
+      const kw = (row.keywords||[]).find(Boolean) || '';
+      fetchStoreName(slug, row.pid, idx, kw);  // ← keyword 전달
     }
   });
 }
@@ -664,10 +679,12 @@ function clearOrders(){
 // ══════════════════════════════════════════════════════════
 //  M열 스토어명 비동기 조회
 // ══════════════════════════════════════════════════════════
-function fetchStoreName(slug, pid, rowIdx){
+// fetchStoreName: slug + pid + keyword 모두 전달 → mallName 정확도 향상
+function fetchStoreName(slug, pid, rowIdx, keyword){
   if(!slug) return;
   const params = new URLSearchParams({slug});
-  if(pid) params.set('pid', pid);
+  if(pid)     params.set('pid',     pid);
+  if(keyword) params.set('keyword', keyword);   // ← keyword 추가 (Shopping API kw-match 우선)
   fetch(`/api/fetch-store-name?${params}`)
     .then(r=>r.json())
     .then(d=>{
@@ -766,7 +783,7 @@ function renderOrderTable(){
             onchange="orderRows[${i}].store=this.value"
             style="color:${r.store&&r.store!==extractSlug(r.url)?'#a78bfa':'#f59e0b'};min-width:70px;"
             placeholder="자동조회중...">
-          <button onclick="fetchStoreName(extractSlug(orderRows[${i}].url),orderRows[${i}].pid,${i})"
+          <button onclick="fetchStoreName(extractSlug(orderRows[${i}].url),orderRows[${i}].pid,${i},(orderRows[${i}].keywords||[]).find(Boolean)||'')"
             style="background:none;border:none;cursor:pointer;color:#03c75a;font-size:.7rem;"
             title="재조회">🔄</button>
         </div>
