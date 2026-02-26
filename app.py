@@ -821,11 +821,209 @@ def api_fetch_place_name():
     return jsonify({"ok": False, "pid": pid, "error": "업체명 추출 실패"})
 
 
+@app.route("/api/fetch-place-spots")
+def api_fetch_place_spots():
+    """플레이스 명소(가볼만한곳) 목록 자동 추출
+    
+    방법 우선순위:
+    1. GraphQL getTrips (pcmap-api) — 가장 안정적
+    2. ROOT_QUERY Apollo trips 파싱 (PC map 캐시)
+    3. m.place around HTML 스크립트 파싱
+    
+    ?url=https://m.place.naver.com/restaurant/1326727196/home&nth=15
+    Returns: {ok, spots, count, nth, spot_nth, spot_nth_clean, method}
+    """
+    import requests as req
+    from bs4 import BeautifulSoup as _BS4
+    import json as _json
+
+    place_url = request.args.get("url", "").strip()
+    nth = int(request.args.get("nth", 15))
+
+    if not place_url:
+        return jsonify({"ok": False, "error": "url 파라미터 없음"})
+
+    m = re.search(r'/(?:place|restaurant|cafe|hospital|beauty|hairshop|store)/(\d+)', place_url)
+    if not m:
+        return jsonify({"ok": False, "error": "플레이스 ID 추출 실패"})
+    pid = m.group(1)
+
+    cat_m = re.search(r'naver\.com/([^/?]+)', place_url)
+    cat = cat_m.group(1) if cat_m else "restaurant"
+
+    headers_m = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+    }
+    headers_pc = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+    }
+
+    spots = []
+    method_used = ""
+
+    # ── 공통: 좌표 추출 ────────────────────────────────────
+    x_val = ""
+    y_val = ""
+    try:
+        coord_r = req.get(f"https://m.place.naver.com/{cat}/{pid}/home",
+                          headers=headers_m, timeout=10)
+        x_m2 = re.search(r'"x"\s*:\s*"?(\d+\.\d+)"?', coord_r.text)
+        y_m2 = re.search(r'"y"\s*:\s*"?(\d+\.\d+)"?', coord_r.text)
+        x_val = x_m2.group(1) if x_m2 else ""
+        y_val = y_m2.group(1) if y_m2 else ""
+    except Exception:
+        pass
+
+    # ── 방법 1: GraphQL getTrips (가장 안정적) ──────────────
+    try:
+        gql_query = """query getTrips($input: TripsInput) {
+  trips(input: $input) { items { id name category } }
+}"""
+        variables = {
+            "input": {
+                "businessId": pid,
+                "businessType": cat,
+                "isAroundSearch": True,
+                "query": "가볼만한곳",
+            }
+        }
+        if x_val and y_val:
+            variables["input"]["x"] = x_val
+            variables["input"]["y"] = y_val
+
+        headers_gql = {
+            **headers_pc,
+            "Content-Type": "application/json",
+            "Referer": f"https://pcmap.place.naver.com/{cat}/{pid}/around",
+            "Origin": "https://pcmap.place.naver.com",
+        }
+        gr = req.post("https://pcmap-api.place.naver.com/graphql",
+                      json=[{"operationName": "getTrips", "variables": variables, "query": gql_query}],
+                      headers=headers_gql, timeout=15)
+        if gr.status_code == 200:
+            gdata = gr.json()
+            items = (gdata[0].get("data", {}).get("trips", {}).get("items", [])
+                     if isinstance(gdata, list)
+                     else gdata.get("data", {}).get("trips", {}).get("items", []))
+            if items:
+                spots = [i.get("name", "") for i in items if i.get("name")]
+                method_used = "graphql_trips"
+                logger.info(f"[PlaceSpots] GraphQL: {len(spots)}개")
+        else:
+            logger.warning(f"[PlaceSpots] GraphQL HTTP {gr.status_code}")
+    except Exception as e:
+        logger.warning(f"[PlaceSpots] GraphQL 실패: {e}")
+
+    # ── 방법 2: ROOT_QUERY trips JSON 직접 파싱 ────────────
+    if not spots:
+        try:
+            pc_home = req.get(f"https://pcmap.place.naver.com/{cat}/{pid}/home",
+                              headers={**headers_pc, "Referer": f"https://pcmap.place.naver.com/{cat}/{pid}/home"},
+                              timeout=15)
+            if pc_home.status_code == 200:
+                text = pc_home.text
+                apollo_idx = text.find("__APOLLO_STATE__")
+                if apollo_idx != -1:
+                    brace_pos = text.find("{", apollo_idx)
+                    state, _ = _json.JSONDecoder().raw_decode(text[brace_pos:])
+                    rq = state.get("ROOT_QUERY", {})
+                    for key, val in rq.items():
+                        if "trips" in key.lower() and isinstance(val, dict):
+                            ref_list = val.get("items", [])
+                            for ref in ref_list:
+                                ref_key = ref.get("__ref", "")
+                                item = state.get(ref_key, {})
+                                name = item.get("name", "")
+                                if name and name not in spots:
+                                    spots.append(name)
+                    if spots:
+                        method_used = "apollo_root_query"
+                        logger.info(f"[PlaceSpots] Apollo ROOT: {len(spots)}개")
+        except Exception as e:
+            logger.warning(f"[PlaceSpots] Apollo ROOT 실패: {e}")
+
+    # ── 방법 3: TripSummary typename (주변탭 다른 캐시) ────
+    if not spots:
+        try:
+            for tab_url in [
+                f"https://pcmap.place.naver.com/{cat}/{pid}/around",
+                f"https://m.place.naver.com/{cat}/{pid}/around?tab=spot",
+            ]:
+                r_around = req.get(tab_url,
+                    headers={**headers_pc, "Referer": f"https://pcmap.place.naver.com/{cat}/{pid}/home"},
+                    timeout=15)
+                if r_around.status_code != 200:
+                    continue
+                text2 = r_around.text
+                apollo_idx2 = text2.find("__APOLLO_STATE__")
+                if apollo_idx2 == -1:
+                    continue
+                brace_pos2 = text2.find("{", apollo_idx2)
+                state2, _ = _json.JSONDecoder().raw_decode(text2[brace_pos2:])
+                
+                # TripSummary type 검색
+                for k, v in state2.items():
+                    if isinstance(v, dict) and v.get("__typename") == "TripSummary":
+                        name = v.get("name", "")
+                        if name and name not in spots:
+                            spots.append(name)
+                
+                # ROOT_QUERY trips 참조
+                rq2 = state2.get("ROOT_QUERY", {})
+                for key2, val2 in rq2.items():
+                    if "trips" in key2.lower() and isinstance(val2, dict):
+                        for ref_item in val2.get("items", []):
+                            ref_key2 = ref_item.get("__ref", "")
+                            item2 = state2.get(ref_key2, {})
+                            name2 = item2.get("name", "")
+                            if name2 and name2 not in spots:
+                                spots.append(name2)
+                
+                if spots:
+                    method_used = "apollo_around"
+                    logger.info(f"[PlaceSpots] Apollo around ({tab_url}): {len(spots)}개")
+                    break
+        except Exception as e:
+            logger.warning(f"[PlaceSpots] Apollo around 실패: {e}")
+
+    if not spots:
+        return jsonify({
+            "ok": False, "pid": pid,
+            "error": "명소 목록 추출 실패",
+            "hint": f"GraphQL/Apollo 모두 실패. coords: x={x_val}, y={y_val}",
+        })
+
+    spot_nth = spots[nth - 1] if len(spots) >= nth else (spots[-1] if spots else "")
+
+    return jsonify({
+        "ok": True,
+        "pid": pid,
+        "spots": spots,
+        "count": len(spots),
+        "nth": nth,
+        "spot_nth": spot_nth,
+        "spot_nth_clean": spot_nth.replace(" ", ""),
+        "method": method_used,
+    })
+
+
+
+
 @app.route("/api/check-place-rank", methods=["POST"])
 def api_check_place_rank():
-    """키워드 검색 시 플레이스 구좌 여부 + 10위 내 순위 확인
+    """키워드 검색 시 플레이스 구좌 여부 + 10위 내 순위 확인 (다중 방법)
+    
+    방법 우선순위:
+    1. m.map.naver.com/search2 (가장 정확, /place/{id} URL 패턴)
+    2. m.search.naver.com 모바일 검색 (JSON businessId + HTML selector)
+    3. Naver 로컬 검색 API (API 키 있을 때)
+    
     POST {keywords: ["강남맛집"], url: "https://m.place.naver.com/restaurant/1326727196/home"}
-    Returns: {ok, results: [{keyword, has_section, rank, message}], rank_blocked}
+    Returns: {ok, results: [{keyword, has_section, rank, message, method}], rank_blocked}
     """
     import requests as req
     from bs4 import BeautifulSoup as _BS4
@@ -846,92 +1044,159 @@ def api_check_place_rank():
     client_id, client_secret = get_api_keys()
 
     headers_m = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
-        "Accept-Language": "ko-KR,ko;q=0.9",
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Referer": "https://m.search.naver.com/",
+        "Accept-Encoding": "gzip, deflate",
     }
 
     results = []
     rank_blocked = False
 
+    def _extract_place_ids_mmap(kw):
+        """m.map.naver.com/search2 방식 - /place/{id} 패턴 추출 (가장 정확)"""
+        try:
+            url = f"https://m.map.naver.com/search2/search.naver?query={_ulp.quote(kw)}&type=PLACE"
+            r = req.get(url, headers=headers_m, timeout=12)
+            if r.status_code != 200:
+                return None, f"HTTP {r.status_code}"
+            ids = re.findall(r'/place/(\d{8,12})', r.text)
+            unique_ids = list(dict.fromkeys(ids))
+            return unique_ids, "mmap"
+        except Exception as e:
+            return None, str(e)[:60]
+
+    def _extract_place_ids_msearch(kw):
+        """m.search.naver.com 모바일 검색 방식"""
+        try:
+            url = f"https://m.search.naver.com/search.naver?where=m&query={_ulp.quote(kw)}"
+            r = req.get(url, headers=headers_m, timeout=15)
+            r.encoding = "utf-8"
+            text = r.text
+            
+            # URL 패턴들 (m.search는 businessId JSON 없음, place URL 패턴 사용)
+            # /restaurant/{id}, /cafe/{id}, /place/{id} 등
+            url_ids = re.findall(r'place\.naver\.com/[^/]+/(\d{8,12})', text)
+            html_ids = re.findall(r'/(?:restaurant|cafe|place|hospital|beauty)/(\d{8,12})', text)
+            
+            # 통합 및 순서 유지 (URL 패턴 우선)
+            all_ids = list(dict.fromkeys(url_ids + html_ids))
+            
+            # place_section 확인
+            soup = _BS4(r.content, "html.parser", from_encoding="utf-8")
+            has_section = len(soup.select("div.place_section")) > 0
+            
+            return all_ids, has_section, "msearch"
+        except Exception as e:
+            return None, False, str(e)[:60]
+
+    def _check_via_naver_api(kw):
+        """Naver 로컬 검색 API 방식"""
+        if not (client_id and client_secret):
+            return None, "API 키 없음"
+        try:
+            api_url = (f"https://openapi.naver.com/v1/search/local.json"
+                       f"?query={_ulp.quote(kw)}&display=10&start=1")
+            r = req.get(api_url, headers={
+                "X-Naver-Client-Id": client_id,
+                "X-Naver-Client-Secret": client_secret,
+            }, timeout=8)
+            if r.status_code == 200:
+                items = r.json().get("items", [])
+                ids = []
+                for item in items:
+                    lm = re.search(r'/(\d{8,12})', item.get("link", ""))
+                    if lm:
+                        ids.append(lm.group(1))
+                return ids, "naver_api"
+            return None, f"API HTTP {r.status_code}"
+        except Exception as e:
+            return None, str(e)[:60]
+
     for kw in keywords:
         if not kw:
             continue
-        result = {"keyword": kw, "has_section": False, "rank": None, "message": ""}
+        result = {"keyword": kw, "has_section": False, "rank": None, "message": "", "method": ""}
 
         try:
-            found_via_api = False
-
-            # 방법1: 네이버 로컬 검색 API (API 키 있을 때)
-            if client_id and client_secret:
-                api_url = (f"https://openapi.naver.com/v1/search/local.json"
-                           f"?query={_ulp.quote(kw)}&display=10&start=1")
-                r = req.get(api_url, headers={
-                    "X-Naver-Client-Id": client_id,
-                    "X-Naver-Client-Secret": client_secret,
-                }, timeout=8)
-                if r.status_code == 200:
-                    found_via_api = True
-                    items = r.json().get("items", [])
-                    if not items:
-                        result.update({"has_section": False,
-                                       "message": "플레이스 구좌 없음 — 키워드 변경 필요 ⚠️"})
-                        rank_blocked = True
-                    else:
-                        result["has_section"] = True
-                        found = False
-                        for i, item in enumerate(items, 1):
-                            link = item.get("link","")
-                            if target_id in link:
-                                result.update({"rank": i, "message": f"✅ {i}위 확인"})
-                                found = True
-                                if i > 10:
-                                    rank_blocked = True
-                                break
-                        if not found:
-                            result.update({"rank": None,
-                                           "message": "플레이스 구좌는 있으나 10위 밖 — 키워드 변경 권장 ⚠️"})
-                            rank_blocked = True
-
-            # 방법2: HTML 파싱 (API 키 없거나 실패 시)
-            if not found_via_api:
-                search_url = f"https://m.search.naver.com/search.naver?where=m&query={_ulp.quote(kw)}"
-                r = req.get(search_url, headers=headers_m, timeout=15)
-                r.encoding = "utf-8"
-                soup = _BS4(r.content, "html.parser", from_encoding="utf-8")
-
-                place_secs = soup.select("div.place_section")
-                if not place_secs:
-                    result.update({"has_section": False,
-                                   "message": "플레이스 구좌 없음 — 키워드 변경 필요 ⚠️"})
+            # ── 방법 1: m.map 방식 (최우선) ─────────────────────
+            mmap_ids, mmap_msg = _extract_place_ids_mmap(kw)
+            
+            if mmap_ids is not None:
+                # mmap 결과로 순위 확인
+                # has_section은 id가 존재하면 플레이스 구좌 있음
+                has_sec = len(mmap_ids) > 0
+                result["has_section"] = has_sec
+                result["method"] = "m.map"
+                
+                if not has_sec:
+                    result["message"] = "플레이스 구좌 없음 — 키워드 변경 필요 ⚠️"
                     rank_blocked = True
+                elif target_id in mmap_ids[:30]:
+                    rank = mmap_ids.index(target_id) + 1
+                    result["rank"] = rank
+                    result["message"] = f"✅ {rank}위 확인 (m.map)"
+                    if rank > 10:
+                        result["message"] = f"⚠️ {rank}위 — 10위 밖, 키워드 변경 권장"
+                        rank_blocked = True
                 else:
-                    result["has_section"] = True
-                    all_ids = []
-                    for sec in place_secs:
-                        for a in sec.find_all("a", href=True):
-                            pm = re.search(r'/(?:place|restaurant|cafe|hospital|beauty|hairshop)/(\d+)', a["href"])
-                            if pm:
-                                pid2 = pm.group(1)
-                                if pid2 not in all_ids:
-                                    all_ids.append(pid2)
-                    if target_id in all_ids:
-                        rank = all_ids.index(target_id) + 1
-                        result.update({"rank": rank, "message": f"✅ {rank}위 확인"})
+                    # mmap에 없으면 m.search로 재확인
+                    msearch_ids, has_sec2, msearch_msg = _extract_place_ids_msearch(kw)
+                    result["has_section"] = has_sec2
+                    result["method"] = "m.search(fallback)"
+                    
+                    if msearch_ids and target_id in msearch_ids[:30]:
+                        rank = msearch_ids.index(target_id) + 1
+                        result["rank"] = rank
+                        result["message"] = f"✅ {rank}위 확인 (검색)"
                         if rank > 10:
+                            result["message"] = f"⚠️ {rank}위 — 10위 밖"
                             rank_blocked = True
                     else:
-                        result.update({"rank": None,
-                                       "message": f"플레이스 구좌는 있으나 10위 밖 ({len(all_ids)}위 내 미발견) ⚠️"})
+                        total = len(mmap_ids)
+                        result["message"] = f"플레이스 구좌 있으나 30위 밖 (총 {total}개) ⚠️"
+                        rank_blocked = True
+            else:
+                # m.map 실패 → m.search 시도
+                logger.warning(f"[PlaceRank] m.map 실패: {mmap_msg}, m.search로 재시도")
+                msearch_ids, has_sec2, msearch_msg = _extract_place_ids_msearch(kw)
+                result["has_section"] = has_sec2
+                result["method"] = "m.search"
+                
+                if not has_sec2:
+                    result["message"] = "플레이스 구좌 없음 — 키워드 변경 필요 ⚠️"
+                    rank_blocked = True
+                elif msearch_ids and target_id in msearch_ids[:30]:
+                    rank = msearch_ids.index(target_id) + 1
+                    result["rank"] = rank
+                    result["message"] = f"✅ {rank}위 확인"
+                    if rank > 10:
+                        result["message"] = f"⚠️ {rank}위 — 10위 밖"
+                        rank_blocked = True
+                else:
+                    # Naver API로 최종 시도
+                    api_ids, api_msg = _check_via_naver_api(kw)
+                    result["method"] = "naver_api"
+                    if api_ids and target_id in api_ids:
+                        rank = api_ids.index(target_id) + 1
+                        result["rank"] = rank
+                        result["has_section"] = True
+                        result["message"] = f"✅ {rank}위 확인 (API)"
+                    else:
+                        result["message"] = f"30위 밖 — 키워드 변경 권장 ⚠️ (시도: mmap→search→api)"
                         rank_blocked = True
 
         except Exception as e:
-            result["message"] = f"확인 오류: {str(e)[:60]}"
+            result["message"] = f"확인 오류: {str(e)[:80]}"
+            logger.error(f"[PlaceRank] 예외: {e}")
 
         results.append(result)
-        logger.info(f"[PlaceRank] kw={kw} target={target_id} → {result.get('message','')}")
+        logger.info(f"[PlaceRank] kw={kw} target={target_id} → rank={result.get('rank')} method={result.get('method')} msg={result.get('message','')[:60]}")
 
     return jsonify({"ok": True, "results": results, "rank_blocked": rank_blocked})
+
+
 
 
 @app.route("/api/automation/place-excel-fill", methods=["POST"])
@@ -962,7 +1227,7 @@ def api_place_excel_fill():
 
     if use_default and os.path.exists(DEFAULT_TEMPLATE):
         wb = _load_workbook_safe(DEFAULT_TEMPLATE)
-        out_name = "[SKP-재흥광고기획] 미션광고 리스트 (플레이스).xlsx"
+        out_name = "엑셀 다운로드 ( 비상용 ) - 플레이스.xlsx"
     elif file:
         try:
             wb = _load_workbook_safe(BytesIO(file.read()))
@@ -1078,7 +1343,7 @@ def api_excel_fill():
 
     if use_default and os.path.exists(DEFAULT_TEMPLATE):
         wb = _load_workbook_safe(DEFAULT_TEMPLATE)
-        out_name = "[SKP-재흥광고기획] 미션광고 리스트.xlsx"
+        out_name = "엑셀 다운로드 ( 비상용 ) - 쇼핑.xlsx"
     elif file:
         try:
             wb = _load_workbook_safe(BytesIO(file.read()))
