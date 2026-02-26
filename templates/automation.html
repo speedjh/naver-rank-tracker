@@ -410,24 +410,18 @@ input[type=number]{background:#0d1220 !important;color:#e2e8f0 !important;border
         </table>
       </div>
 
-      <!-- 명소명 입력 -->
+      <!-- 명소명 자동추출 (숨김 input + 상태 표시만) -->
       <div style="margin-top:12px;background:#0d1525;border:1px solid #1e293b;border-radius:8px;padding:12px;">
-        <div style="font-size:.7rem;color:#03c75a;font-weight:700;margin-bottom:6px;">🏛 정답 명소명 입력</div>
-        <div style="font-size:.65rem;color:#64748b;margin-bottom:8px;">
-          플레이스의 <strong style="color:#e2e8f0;">주변 탭 → 명소 탭</strong>에서 15번째 명소명을 입력하세요.<br>
-          ※ 띄어쓰기 없이 붙여서 입력 (예: <code style="color:#f59e0b;">창원향교</code>)
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <input type="text" id="placeSpotAnswer" placeholder="명소명 입력 (예: 창원향교)"
-            style="flex:1;background:#0a0f1a;border:1px solid #1e3a5f;color:#e2e8f0;
-                   border-radius:6px;padding:7px 10px;font-size:.8rem;box-sizing:border-box;">
-          <button onclick="autoFetchSpot()" id="btnAutoFetchSpot"
-            style="background:#0ea5e9;color:#fff;border:none;border-radius:6px;padding:7px 12px;font-size:.75rem;cursor:pointer;white-space:nowrap;flex-shrink:0;">
-            🤖 자동추출
-          </button>
-        </div>
-        <div id="autoFetchSpotStatus" style="font-size:.7rem;color:#94a3b8;margin-top:4px;"></div>
+        <div style="font-size:.7rem;color:#03c75a;font-weight:700;margin-bottom:6px;">🏛 정답 명소명 <span style="color:#0ea5e9;font-weight:400;">(자동 추출)</span></div>
+        <!-- 값 저장용 hidden input - 사용자에게 보이지 않음 -->
+        <input type="hidden" id="placeSpotAnswer">
+        <div id="autoFetchSpotStatus" style="font-size:.75rem;color:#94a3b8;margin-top:2px;">⏳ URL 입력 후 자동 추출됩니다...</div>
         <div id="placeSpotPreview" style="font-size:.65rem;color:#94a3b8;margin-top:5px;"></div>
+        <!-- 수동 재추출 버튼 (오류 시 사용) -->
+        <button onclick="autoFetchSpot()" id="btnAutoFetchSpot"
+          style="margin-top:6px;background:transparent;color:#475569;border:1px solid #1e3a5f;border-radius:6px;padding:4px 10px;font-size:.7rem;cursor:pointer;">
+          🔄 다시 추출
+        </button>
       </div>
 
       <!-- 미션 템플릿 -->
