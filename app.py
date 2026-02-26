@@ -1249,6 +1249,11 @@ def api_place_excel_fill():
         out_name = "place_campaign.xlsx"
 
     ws = wb.active
+    # 정확한 시트 우선 선택: 업로드된 시트 기준 (키워드분할 사본 > 시트테스트용 > active)
+    for _sn in ['키워드분할 사본', '시트테스트용']:
+        if _sn in wb.sheetnames:
+            ws = wb[_sn]
+            break
     start_col_idx = column_index_from_string(start_col_letter)
     MERGE_OFFSETS   = [0, 2, 3, 4, 5, 6, 7, 13, 14]
     FORMULA_OFFSETS = {4, 5, 6, 7, 14}
@@ -1365,6 +1370,11 @@ def api_excel_fill():
         out_name = "filled_campaign.xlsx"
 
     ws = wb.active
+    # 정확한 시트 우선 선택: 업로드된 시트 기준 (키워드분할 사본 > 시트테스트용 > active)
+    for _sn in ['키워드분할 사본', '시트테스트용']:
+        if _sn in wb.sheetnames:
+            ws = wb[_sn]
+            break
 
     start_col_idx = column_index_from_string(start_col_letter)  # A=1
 
