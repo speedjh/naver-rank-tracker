@@ -1256,7 +1256,7 @@ def api_place_excel_fill():
             break
     start_col_idx = column_index_from_string(start_col_letter)
     MERGE_OFFSETS   = [0, 2, 3, 4, 5, 6, 7, 13, 14]
-    FORMULA_OFFSETS = {4, 5, 6, 7, 14}
+    FORMULA_OFFSETS = {4, 5, 6, 14}  # H(7) 제외 - 포인트값 직접 기입
 
     def thin_side(): return Side(border_style="thin", color="C8C8C8")
     def normal_border():
@@ -1382,7 +1382,7 @@ def api_excel_fill():
     MERGE_OFFSETS = [0, 2, 3, 4, 5, 6, 7, 13, 14]
 
     # 수식 보존 오프셋 (덮어쓰지 않음): E=4,F=5,G=6,H=7,O=14
-    FORMULA_OFFSETS = {4, 5, 6, 7, 14}
+    FORMULA_OFFSETS = {4, 5, 6, 14}  # H(7) 제외 - 포인트값 직접 기입
 
     def thin_side(): return Side(border_style="thin", color="C8C8C8")
     def camp_border():
