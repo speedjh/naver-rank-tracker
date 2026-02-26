@@ -434,7 +434,7 @@ input[type=number]{background:#0d1220 !important;color:#e2e8f0 !important;border
 1. 하단 [검색어 복사하기] 버튼을 클릭 하고, 키워드를 복사해주세요.
 2. 힌트보러가기 버튼 클릭 후 네이버 앱에 접속해주세요.
 3. 복사된 키워드를 검색 창에 붙여넣고 검색해주세요.
-4.[*{blurred_name}]플레이스를 방문 하고 [ 주변 ] 탭을 클릭 해주세요.
+4.[{blurred_name}]플레이스를 방문 하고 [ 주변 ] 탭을 클릭 해주세요.
 ※ 복사된 키워드 검색 시, 해당 플레이스가 없는 경우 아래 '펼쳐서 더보기' 클릭하여 찾아주세요.
 5. [ 주변 ] 탭을 클릭 후 바로 아래 [ 명소 ] 탭을 클릭 해주세요.
 6. [ 초성힌트 ]를 보고 [ 명소 ] 탭에서 정답을 찾아주세요.
@@ -443,7 +443,7 @@ input[type=number]{background:#0d1220 !important;color:#e2e8f0 !important;border
 7. 초성힌트 : {{chosung}}
 정답 : <{answer_len}> 글자
 * 정답란에 띄어쓰기 없이 입력 후 제출해주세요.</textarea>
-          <div class="tpl-hint">변수: {blurred_name} 앞글자 블러처리 업체명 · {chosung} 초성힌트 자동생성 · {answer_len} 글자수 자동계산</div>
+          <div class="tpl-hint">변수: {blurred_name} 첫글자 *블러처리 업체명 · {chosung} 초성힌트 자동생성 · {answer_len} 글자수 자동계산</div>
         </div>
       </div>
 
@@ -1259,6 +1259,12 @@ function checkPlaceRankRow(idx){
     if(d.ok){
       placeOrderRows[idx].rankResults = d.results;
       if(d.rank_blocked) placeRankBlocked = true;
+      else {
+        // 키워드 수정 후 재체크 시 전체 행 기준으로 blocked 재계산
+        placeRankBlocked = placeOrderRows.some(row =>
+          (row.rankResults||[]).some(rr => !rr.rank || rr.rank > 10)
+        );
+      }
       renderPlaceOrderTable();
     }
   }).catch(e=>{ cell.innerHTML = '<span style="color:#ef4444;font-size:.65rem;">오류</span>'; });
@@ -1295,15 +1301,17 @@ function generatePlaceAll(){
   const tpl = document.getElementById('placeMissionTpl').value;
   const spotAnswer = document.getElementById('placeSpotAnswer').value.replace(/\s/g,'');
 
-  if(!spotAnswer){ alert('정답 명소명을 입력해주세요.'); return; }
-
-  const chosung = getChosung(spotAnswer);
-  const answerLen = spotAnswer.length;
+  // spotAnswer 없을 때 '?' 처리 후 계속 (자동추출 실패 시에도 미션 생성 가능)
+  if(!spotAnswer){
+    if(!confirm('⚠️ 명소명이 추출되지 않았습니다.\n초성힌트가 비어있는 상태로 생성하시겠습니까?')) return;
+  }
+  const chosung = spotAnswer ? getChosung(spotAnswer) : '?';
+  const answerLen = spotAnswer ? spotAnswer.length : 0;
 
   placeCampaignData = [];
 
   for(const r of selected){
-    const blurred = r.name ? ('■'+r.name.slice(1)) : '■업체명';
+    const blurred = r.name ? ('*'+r.name.slice(1)) : '*업체명';
     const pid = r.pid || (r.url.match(/\/(\d{7,})/)||[])[1] || '';
 
     let kws = (r.keywords||[]).filter(Boolean);
