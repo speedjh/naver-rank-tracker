@@ -593,7 +593,14 @@ def api_fetch_store_name():
     except Exception as e:
         logger.warning(f"[StoreNameFetch] crawl 실패: {e}")
 
-    # 4) 최종 폴백: slug 반환
+    # 4) 최종 폴백: slug가 영어만(업체명 미확인) 경우 '원부 상품' 반환
+    # 예: idbag → '원부 상품' (한글 업체명 미노출)
+    is_english_only = bool(slug) and bool(re.match(r'^[a-zA-Z0-9_\-]+$', slug))
+    if is_english_only:
+        logger.info(f"[StoreNameFetch] english-slug fallback slug={slug} → 원부 상품")
+        return jsonify({"ok": False, "name": "", "slug": slug, "source": "원부상품",
+                        "is_origin": True})
+
     logger.info(f"[StoreNameFetch] fallback slug={slug}")
     return jsonify({"ok": False, "name": slug, "slug": slug, "source": "slug"})
 
@@ -908,7 +915,7 @@ def api_fetch_place_spots():
     import json as _json
 
     place_url = request.args.get("url", "").strip()
-    nth = int(request.args.get("nth", 15))
+    nth = max(1, int(request.args.get("nth", 15)))  # nth=0 버그 방지 (0이하 → 1로 처리)
 
     if not place_url:
         return jsonify({"ok": False, "error": "url 파라미터 없음"})
@@ -944,9 +951,18 @@ def api_fetch_place_spots():
             (f"https://m.place.naver.com/{cat}/{pid}/around?filter=100", True),
             (f"https://m.place.naver.com/{cat}/{pid}/around", False),
         ]
+        import time as _time
         for tab_url, use_filter in around_urls:
-            r_around = req.get(tab_url, headers=headers_m, timeout=15)
-            if r_around.status_code != 200:
+            # 간헐적 네트워크 오류 대비: 최대 2회 retry
+            r_around = None
+            for _retry in range(2):
+                try:
+                    r_around = req.get(tab_url, headers=headers_m, timeout=15)
+                    break
+                except Exception as _retry_err:
+                    logger.warning(f"[PlaceSpots] retry {_retry+1}/2 ({tab_url}): {_retry_err}")
+                    _time.sleep(1)
+            if r_around is None or r_around.status_code != 200:
                 continue
             r_around.encoding = "utf-8"
             text = r_around.text
@@ -1087,16 +1103,19 @@ def api_fetch_place_spots():
         })
 
     # nth번째 추출 (15위 미만이면 마지막 항목 반환)
+    # spot_nth_clean: 모든 공백 제거 (정답 입력 시 띄어쓰기 불필요)
     spot_nth = spots[nth - 1] if len(spots) >= nth else (spots[-1] if spots else "")
+    spot_nth_clean = spot_nth.replace(" ", "")  # 띄어쓰기 제거 → 정답란 표준화
 
     return jsonify({
         "ok": True,
         "pid": pid,
-        "spots": spots,
+        "spots": [s.replace(" ", "") for s in spots],  # 목록 전체도 공백 제거
+        "spots_raw": spots,                              # 원본 이름 보존 (디버깅용)
         "count": len(spots),
         "nth": nth,
-        "spot_nth": spot_nth,
-        "spot_nth_clean": spot_nth.replace(" ", ""),
+        "spot_nth": spot_nth_clean,        # 공백 제거된 값 (하위호환)
+        "spot_nth_clean": spot_nth_clean,  # 명시적 clean 필드
         "method": method_used,
         "filtered": True,
     })
