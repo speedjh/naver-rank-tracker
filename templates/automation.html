@@ -1184,7 +1184,7 @@ function parsePlacePaste(){
     const daily   = cols[5]||'';
     const keywords = kwRaw.split(/[,\/]/).map(k=>k.trim()).filter(Boolean);
     placeOrderRows.push({ start, end, keywords, url, name, daily,
-      store:'', pid:'', rankResults:[] });
+      store:'', pid:'', spot:'', spotStatus:'', rankResults:[] });
   }
   renderPlaceOrderTable();
   document.getElementById('placeOrderTablePanel').style.display = 'block';
@@ -1210,10 +1210,10 @@ function parsePlacePaste(){
     }
   });
 
-  // 플레이스 URL 파싱 완료 후 명소 자동 추출 실행
-  if(placeOrderRows.length > 0 && placeOrderRows[0].url){
-    setTimeout(() => autoFetchSpot(), 600);
-  }
+  // 플레이스 URL 파싱 완료 후 각 행마다 개별 명소 자동 추출
+  placeOrderRows.forEach((r, i) => {
+    if(r.url) fetchSpotForRow(r.url, i);
+  });
 }
 
 function loadPlaceDemo(){
@@ -1259,6 +1259,15 @@ function renderPlaceOrderTable(){
       </td>
       <td><input type="number" value="${r.daily}" onchange="placeOrderRows[${i}].daily=this.value"
         style="background:#0a0f1a;border:1px solid #1e3a5f;color:#e2e8f0;border-radius:4px;padding:3px 6px;font-size:.72rem;width:60px;"></td>
+      <td style="font-size:.65rem;color:${r.spot?'#03c75a':'#94a3b8'};max-width:90px;">
+        ${r.spot
+          ? `<span title="${r.spot}">${r.spot}</span>`
+          : (r.spotStatus==='loading'
+              ? '⏳ 추출중...'
+              : '<button class="btn btn-secondary btn-sm" onclick="fetchSpotForRow(placeOrderRows['+i+'].url,'+i+')" style="font-size:.6rem;padding:1px 5px;">명소추출</button>'
+            )
+        }
+      </td>
       <td id="placeRank_${i}">
         ${r.rankResults.length?
           r.rankResults.map(rr=>`<span style="font-size:.65rem;color:${rr.rank&&rr.rank<=10?'#03c75a':'#ef4444'};">${rr.keyword}: ${rr.message||'-'}</span>`).join('<br>')
@@ -1324,16 +1333,15 @@ function generatePlaceAll(){
   }
 
   const tpl = document.getElementById('placeMissionTpl').value;
-  const spotAnswer = document.getElementById('placeSpotAnswer').value.replace(/\s/g,'');
-
-  // spotAnswer 없을 때 빈 값으로 계속 진행 (자동추출 실패 시에도 미션 생성)
-  // confirm 제거 → 방해없이 바로 생성
-  const chosung = spotAnswer ? getChosung(spotAnswer) : '?';
-  const answerLen = spotAnswer ? spotAnswer.length : 0;
+  // ⚑ spotAnswer는 행마다 r.spot에서 가져옴 (전역 input 제거)
 
   placeCampaignData = [];
 
   for(const r of selected){
+    // 각 행의 개별 명소 사용
+    const spotAnswer = (r.spot || '').replace(/\s/g,'');
+    const chosung = spotAnswer ? getChosung(spotAnswer) : '?';
+    const answerLen = spotAnswer ? spotAnswer.length : 0;
     const blurred = r.name ? ('*'+r.name.slice(1)) : '*업체명';
     const pid = r.pid || (r.url.match(/\/(\d{7,})/)||[])[1] || '';
 
@@ -1504,6 +1512,32 @@ function fillPlaceTemplate(){
     .catch(e=>{ alert('다운로드 오류: '+e.message); btn.disabled=false; btn.textContent='⬇️ 엑셀 다운로드'; });
 }
 
+
+// ── 행별 개별 명소 fetch (핵심 수정) ──────────────────────────
+async function fetchSpotForRow(url, rowIdx) {
+  if(!url || rowIdx === undefined) return;
+  placeOrderRows[rowIdx].spotStatus = 'loading';
+  renderPlaceOrderTable();
+  try {
+    const resp = await fetch('/api/fetch-place-spots?url=' + encodeURIComponent(url) + '&nth=15');
+    const data = await resp.json();
+    if(data.ok){
+      placeOrderRows[rowIdx].spot = data.spot_nth_clean || data.spot_nth || '';
+      placeOrderRows[rowIdx].spotStatus = 'done';
+    } else {
+      placeOrderRows[rowIdx].spotStatus = 'error';
+    }
+  } catch(e) {
+    placeOrderRows[rowIdx].spotStatus = 'error';
+  }
+  renderPlaceOrderTable();
+  // 선택된 행이면 전역 input도 동기화
+  const cb = document.getElementById('place-cb-' + rowIdx);
+  if(cb && cb.checked){
+    const si = document.getElementById('placeSpotAnswer');
+    if(si && placeOrderRows[rowIdx].spot) si.value = placeOrderRows[rowIdx].spot;
+  }
+}
 
 // ── 명소 자동 추출 ────────────────────────────────────────
 async function autoFetchSpot() {
