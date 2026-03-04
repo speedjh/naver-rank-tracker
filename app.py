@@ -19,6 +19,57 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 네이버 플레이스 "주변 > 명소" 카테고리 화이트리스트
+# 실제 네이버 TripSummary category 값 기준으로 필터링
+# ──────────────────────────────────────────────────────────────────────────────
+SPOT_WHITELIST = {
+    # 공원류
+    "근린공원", "자연공원", "도시공원", "체육공원", "소공원", "어린이공원",
+    "문화공원", "역사공원", "수변공원", "생태공원", "국립공원", "도립공원",
+    # 광장·산책
+    "광장", "산책로",
+    # 문화시설
+    "미술관", "박물관", "갤러리", "갤러리,화랑", "갤러리·화랑",
+    "전시관", "전시장", "공연장", "콘서트홀", "아트센터", "아트홀",
+    "복합문화공간", "문화센터", "문화회관", "시민회관",
+    "도서관", "기념관", "이벤트홀",
+    # 역사·유적
+    "사찰", "절", "성당", "교회", "전통사찰",
+    "세계문화유산", "유적지", "문화재", "역사유적지", "사적지",
+    "향교", "서원", "궁궐",
+    # 자연
+    "산", "계곡", "폭포", "해수욕장", "강", "호수", "저수지",
+    "수목원", "식물원", "수족관", "동물원", "자연보호구역", "생태관",
+    # 테마·체험
+    "테마파크", "워터파크", "아쿠아리움", "과학관", "천문대", "어린이과학관",
+    # 관광명소
+    "관광명소", "랜드마크", "관광안내소",
+}
+
+SPOT_KEYWORDS = [
+    "공원", "미술관", "박물관", "갤러리", "공연장", "전시",
+    "문화센터", "문화회관", "도서관", "기념관",
+    "세계문화유산", "유적", "문화재", "사찰", "향교", "궁궐",
+    "수목원", "식물원", "동물원",
+    "테마파크", "워터파크", "아쿠아리움", "과학관", "천문대",
+    "관광명소", "랜드마크", "이벤트홀",
+]
+
+def is_spot_category(category: str) -> bool:
+    """네이버 '주변 > 명소' 탭에 표시되는 카테고리인지 판별"""
+    if not category:
+        return False
+    parts = [p.strip() for p in category.replace("·", ",").split(",")]
+    for part in parts:
+        if part in SPOT_WHITELIST:
+            return True
+        for kw in SPOT_KEYWORDS:
+            if kw in part:
+                return True
+    return False
+
 app.secret_key = os.environ.get("SECRET_KEY", "naver_rank_agency_2025")
 
 # ── 캐시 방지: HTML 페이지는 항상 최신 버전 서빙 ──
@@ -893,14 +944,28 @@ def api_fetch_place_spots():
             brace_pos2 = text2.find("{", apollo_idx2)
             state2, _ = _json.JSONDecoder().raw_decode(text2[brace_pos2:])
 
-            # TripSummary typename 검색
+            # TripSummary typename 검색 (명소 카테고리 필터링 적용)
+            all_trips = []
             for k, v in state2.items():
                 if isinstance(v, dict) and v.get("__typename") == "TripSummary":
                     name = v.get("name", "")
-                    if name and name not in spots:
-                        spots.append(name)
+                    category = v.get("category", "")
+                    if name:
+                        all_trips.append({"name": name, "category": category})
 
-            # ROOT_QUERY trips 참조도 추가
+            # 1차: 명소 카테고리만 필터링
+            spot_filtered = [t["name"] for t in all_trips if is_spot_category(t["category"])]
+            if spot_filtered:
+                for name in spot_filtered:
+                    if name not in spots:
+                        spots.append(name)
+            else:
+                # 명소 카테고리가 하나도 없으면 전체 반환 (fallback)
+                for t in all_trips:
+                    if t["name"] not in spots:
+                        spots.append(t["name"])
+
+            # ROOT_QUERY trips 참조도 추가 (명소 카테고리 필터링)
             rq2 = state2.get("ROOT_QUERY", {})
             for key2, val2 in rq2.items():
                 if "trips" in key2.lower() and isinstance(val2, dict):
@@ -908,7 +973,8 @@ def api_fetch_place_spots():
                         ref_key2 = ref_item.get("__ref", "")
                         item2 = state2.get(ref_key2, {})
                         name2 = item2.get("name", "")
-                        if name2 and name2 not in spots:
+                        cat2 = item2.get("category", "")
+                        if name2 and name2 not in spots and is_spot_category(cat2):
                             spots.append(name2)
 
             if spots:
@@ -1018,6 +1084,7 @@ def api_fetch_place_spots():
         "spot_nth": spot_nth,
         "spot_nth_clean": spot_nth.replace(" ", ""),
         "method": method_used,
+        "filtered": True,
     })
 
 
