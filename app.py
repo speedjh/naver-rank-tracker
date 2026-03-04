@@ -893,14 +893,16 @@ def api_fetch_place_name():
 @app.route("/api/fetch-place-spots")
 def api_fetch_place_spots():
     """플레이스 명소(가볼만한곳) 목록 자동 추출
-    
-    방법 우선순위 (수정됨):
-    1. 모바일 around 탭 Apollo State 파싱 — 가장 정확 (플레이스별 개별 결과)
-    2. PC map Apollo ROOT_QUERY 파싱
-    3. GraphQL getTrips — 마지막 fallback (IP 캐싱 이슈로 신뢰도 낮음)
-    
-    ?url=https://m.place.naver.com/restaurant/1326727196/home&nth=15
-    Returns: {ok, spots, count, nth, spot_nth, spot_nth_clean, method}
+
+    핵심 원칙:
+    - ?filter=100 URL = 네이버 "주변 > 명소" 탭 → 추가 카테고리 필터링 불필요
+    - ROOT_QUERY trips items 순서 = 네이버 실제 명소 순위 (반드시 이 순서 사용)
+    - TripSummary 딕셔너리 순서는 비정렬(삽입순서) → 사용 금지
+
+    방법 우선순위:
+    1. 모바일 around?filter=100  → ROOT_QUERY trips 순서 그대로 (가장 정확)
+    2. 모바일 around (일반)      → ROOT_QUERY trips + 카테고리 필터링
+    3. GraphQL getTrips          → 마지막 fallback (IP 캐싱 이슈 있음)
     """
     import requests as req
     import json as _json
@@ -933,75 +935,69 @@ def api_fetch_place_spots():
     spots = []
     method_used = ""
 
-    # ── 방법 1: 모바일 around 탭 Apollo State 파싱 (가장 정확) ──────────────
-    # GraphQL getTrips는 서버 IP 캐싱으로 플레이스 무관 동일 결과 반환 이슈가 있어
-    # 모바일 around 탭을 우선 사용
+    # ──────────────────────────────────────────────────────────────────────
+    # 방법 1: 모바일 around (filter=100 우선 → 일반 around fallback)
+    # !!중요!! ROOT_QUERY trips items 순서를 그대로 사용해야 네이버 순위 일치
+    # ──────────────────────────────────────────────────────────────────────
     try:
-        # ?filter=100 또는 ?tab=spot URL도 지원
-        for tab_url in [
-            f"https://m.place.naver.com/{cat}/{pid}/around?filter=100",
-            f"https://m.place.naver.com/{cat}/{pid}/around",
-        ]:
-            r_around = req.get(tab_url, headers=headers_m,
-                               timeout=15)
+        around_urls = [
+            (f"https://m.place.naver.com/{cat}/{pid}/around?filter=100", True),
+            (f"https://m.place.naver.com/{cat}/{pid}/around", False),
+        ]
+        for tab_url, use_filter in around_urls:
+            r_around = req.get(tab_url, headers=headers_m, timeout=15)
             if r_around.status_code != 200:
                 continue
-            r_around.encoding = 'utf-8'  # 인코딩 명시 (깨짐 방지)
-            text2 = r_around.text
-            apollo_idx2 = text2.find("__APOLLO_STATE__")
-            if apollo_idx2 == -1:
+            r_around.encoding = "utf-8"
+            text = r_around.text
+
+            apollo_idx = text.find("__APOLLO_STATE__")
+            if apollo_idx == -1:
                 continue
-            brace_pos2 = text2.find("{", apollo_idx2)
-            state2, _ = _json.JSONDecoder().raw_decode(text2[brace_pos2:])
+            brace_pos = text.find("{", apollo_idx)
+            state, _ = _json.JSONDecoder().raw_decode(text[brace_pos:])
 
-            # TripSummary typename 검색 (명소 카테고리 필터링 적용)
-            all_trips = []
-            for k, v in state2.items():
-                if isinstance(v, dict) and v.get("__typename") == "TripSummary":
-                    name = v.get("name", "")
-                    category = v.get("category", "")
-                    if name:
-                        all_trips.append({"name": name, "category": category})
+            # ROOT_QUERY trips items 순서로 추출 (순서 보장 필수)
+            rq = state.get("ROOT_QUERY", {})
+            ordered_spots = []
+            for key, val in rq.items():
+                if "trips" in key.lower() and isinstance(val, dict):
+                    for ref_item in val.get("items", []):
+                        ref_key = ref_item.get("__ref", "")
+                        item = state.get(ref_key, {})
+                        name = item.get("name", "")
+                        category = item.get("category", "")
+                        if not name or name in ordered_spots:
+                            continue
+                        if use_filter:
+                            # filter=100: 네이버가 이미 명소 필터링 → 추가 필터 없이 그대로
+                            ordered_spots.append(name)
+                        else:
+                            # 일반 around: 카테고리 화이트리스트 필터링
+                            if is_spot_category(category):
+                                ordered_spots.append(name)
 
-            # 1차: 명소 카테고리만 필터링
-            spot_filtered = [t["name"] for t in all_trips if is_spot_category(t["category"])]
-            if spot_filtered:
-                for name in spot_filtered:
-                    if name not in spots:
-                        spots.append(name)
-            else:
-                # 명소 카테고리가 하나도 없으면 전체 반환 (fallback)
-                for t in all_trips:
-                    if t["name"] not in spots:
-                        spots.append(t["name"])
-
-            # ROOT_QUERY trips 참조도 추가 (명소 카테고리 필터링)
-            rq2 = state2.get("ROOT_QUERY", {})
-            for key2, val2 in rq2.items():
-                if "trips" in key2.lower() and isinstance(val2, dict):
-                    for ref_item in val2.get("items", []):
-                        ref_key2 = ref_item.get("__ref", "")
-                        item2 = state2.get(ref_key2, {})
-                        name2 = item2.get("name", "")
-                        cat2 = item2.get("category", "")
-                        if name2 and name2 not in spots and is_spot_category(cat2):
-                            spots.append(name2)
-
-            if spots:
-                method_used = "mobile_around"
-                logger.info(f"[PlaceSpots] 모바일 around ({tab_url}): {len(spots)}개")
+            if ordered_spots:
+                spots = ordered_spots
+                method_used = "mobile_around_filter100" if use_filter else "mobile_around_filtered"
+                logger.info(f"[PlaceSpots] {method_used} ({tab_url}): {len(spots)}개")
                 break
+
     except Exception as e:
         logger.warning(f"[PlaceSpots] 모바일 around 실패: {e}")
 
-    # ── 방법 2: PC map ROOT_QUERY Apollo 파싱 ─────────────────────────────
+    # ──────────────────────────────────────────────────────────────────────
+    # 방법 2: PC map ROOT_QUERY Apollo 파싱 (fallback)
+    # ──────────────────────────────────────────────────────────────────────
     if not spots:
         try:
-            pc_home = req.get(f"https://pcmap.place.naver.com/{cat}/{pid}/home",
-                              headers={**headers_pc, "Referer": f"https://pcmap.place.naver.com/{cat}/{pid}/home"},
-                              timeout=15)
+            pc_home = req.get(
+                f"https://pcmap.place.naver.com/{cat}/{pid}/home",
+                headers={**headers_pc, "Referer": f"https://pcmap.place.naver.com/{cat}/{pid}/home"},
+                timeout=15,
+            )
             if pc_home.status_code == 200:
-                pc_home.encoding = 'utf-8'
+                pc_home.encoding = "utf-8"
                 text = pc_home.text
                 apollo_idx = text.find("__APOLLO_STATE__")
                 if apollo_idx != -1:
@@ -1010,12 +1006,12 @@ def api_fetch_place_spots():
                     rq = state.get("ROOT_QUERY", {})
                     for key, val in rq.items():
                         if "trips" in key.lower() and isinstance(val, dict):
-                            ref_list = val.get("items", [])
-                            for ref in ref_list:
+                            for ref in val.get("items", []):
                                 ref_key = ref.get("__ref", "")
                                 item = state.get(ref_key, {})
                                 name = item.get("name", "")
-                                if name and name not in spots:
+                                category = item.get("category", "")
+                                if name and name not in spots and is_spot_category(category):
                                     spots.append(name)
                     if spots:
                         method_used = "apollo_root_query"
@@ -1023,16 +1019,18 @@ def api_fetch_place_spots():
         except Exception as e:
             logger.warning(f"[PlaceSpots] Apollo ROOT 실패: {e}")
 
-    # ── 방법 3: GraphQL getTrips (최후 fallback, IP 캐싱 이슈 있음) ─────────
+    # ──────────────────────────────────────────────────────────────────────
+    # 방법 3: GraphQL getTrips (최후 fallback - IP 캐싱 이슈 있음)
+    # ──────────────────────────────────────────────────────────────────────
     if not spots:
         try:
-            # 좌표 추출
-            x_val = ""
-            y_val = ""
+            x_val, y_val = "", ""
             try:
-                coord_r = req.get(f"https://m.place.naver.com/{cat}/{pid}/home",
-                                  headers=headers_m, timeout=10)
-                coord_r.encoding = 'utf-8'
+                coord_r = req.get(
+                    f"https://m.place.naver.com/{cat}/{pid}/home",
+                    headers=headers_m, timeout=10,
+                )
+                coord_r.encoding = "utf-8"
                 x_m2 = re.search(r'"x"\s*:\s*"?(\d+\.\d+)"?', coord_r.text)
                 y_m2 = re.search(r'"y"\s*:\s*"?(\d+\.\d+)"?', coord_r.text)
                 x_val = x_m2.group(1) if x_m2 else ""
@@ -1055,20 +1053,24 @@ def api_fetch_place_spots():
                 variables["input"]["x"] = x_val
                 variables["input"]["y"] = y_val
 
-            headers_gql = {
-                **headers_pc,
-                "Content-Type": "application/json",
-                "Referer": f"https://pcmap.place.naver.com/{cat}/{pid}/around",
-                "Origin": "https://pcmap.place.naver.com",
-            }
-            gr = req.post("https://pcmap-api.place.naver.com/graphql",
-                          json=[{"operationName": "getTrips", "variables": variables, "query": gql_query}],
-                          headers=headers_gql, timeout=15)
+            gr = req.post(
+                "https://pcmap-api.place.naver.com/graphql",
+                json=[{"operationName": "getTrips", "variables": variables, "query": gql_query}],
+                headers={
+                    **headers_pc,
+                    "Content-Type": "application/json",
+                    "Referer": f"https://pcmap.place.naver.com/{cat}/{pid}/around",
+                    "Origin": "https://pcmap.place.naver.com",
+                },
+                timeout=15,
+            )
             if gr.status_code == 200:
                 gdata = gr.json()
-                items = (gdata[0].get("data", {}).get("trips", {}).get("items", [])
-                         if isinstance(gdata, list)
-                         else gdata.get("data", {}).get("trips", {}).get("items", []))
+                items = (
+                    gdata[0].get("data", {}).get("trips", {}).get("items", [])
+                    if isinstance(gdata, list)
+                    else gdata.get("data", {}).get("trips", {}).get("items", [])
+                )
                 if items:
                     spots = [i.get("name", "") for i in items if i.get("name")]
                     method_used = "graphql_trips"
@@ -1078,11 +1080,13 @@ def api_fetch_place_spots():
 
     if not spots:
         return jsonify({
-            "ok": False, "pid": pid,
+            "ok": False,
+            "pid": pid,
             "error": "명소 목록 추출 실패",
             "hint": "모바일 around / Apollo / GraphQL 모두 실패",
         })
 
+    # nth번째 추출 (15위 미만이면 마지막 항목 반환)
     spot_nth = spots[nth - 1] if len(spots) >= nth else (spots[-1] if spots else "")
 
     return jsonify({
@@ -1096,7 +1100,6 @@ def api_fetch_place_spots():
         "method": method_used,
         "filtered": True,
     })
-
 
 
 @app.route("/api/check-place-rank", methods=["POST"])
