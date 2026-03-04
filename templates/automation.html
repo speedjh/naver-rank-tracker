@@ -308,7 +308,7 @@ input[type=number]{background:#0d1220 !important;color:#e2e8f0 !important;border
 
  ▶판매처 : {store_name}
 
- 5. 상세페이지 하단 구매 추가정보에서 상품번호 뒤 5자리를
+ 5. 상세페이지 하단 구매 추가정보에서 상품번호 앞 5자리를
  아래 정답란에 입력 후 제출해주세요.</textarea>
           <div class="tpl-hint">변수: {keyword} 해당 행 키워드 · {blurred_name} 첫단어 유지+블러 처리된 상품명 · {store_name} 스토어명(자동조회)</div>
         </div>
@@ -688,12 +688,27 @@ function fetchStoreName(slug, pid, rowIdx, keyword){
   fetch(`/api/fetch-store-name?${params}`)
     .then(r=>r.json())
     .then(d=>{
-      const name = (d.ok && d.name) ? d.name : slug;
+      // 원부 상품 판별: 영어소문자만인 slug 또는 is_origin 플래그
+      const isOrigin = d.is_origin || (!d.ok && /^[a-zA-Z0-9_\-]+$/.test(slug));
+      let name;
+      if(isOrigin){
+        name = '원부 상품';
+      } else if(d.ok && d.name){
+        name = d.name;
+      } else if(!d.ok && !d.name){
+        name = '원부 상품';  // 업체명 마당 미노출 경우
+      } else {
+        name = slug;
+      }
       orderRows[rowIdx].store = name;
       const el = document.getElementById(`store-input-${rowIdx}`);
       if(el){
         el.value = name;
-        el.style.color = (d.ok && d.name && d.name !== slug) ? '#a78bfa' : '#f59e0b';
+        if(isOrigin || name === '원부 상품'){
+          el.style.color = '#94a3b8';  // 회색: 원부 상품
+        } else {
+          el.style.color = (d.ok && d.name && d.name !== slug) ? '#a78bfa' : '#f59e0b';
+        }
       }
     })
     .catch(()=>{});
