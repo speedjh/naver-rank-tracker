@@ -1147,8 +1147,8 @@ def api_check_place_rank():
         if not kw:
             return kw
         try:
-            # %XX 형태면 디코딩, 아니면 그대로
-            return _uqp(kw) if '%' in kw else kw
+            # unquote_plus: %XX와 +(공백대용) 모두 디코딩
+            return _uqp(kw)
         except Exception:
             return kw
     keywords = [_safe_decode_kw(k) for k in keywords_raw]
