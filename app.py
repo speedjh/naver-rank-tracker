@@ -1138,8 +1138,20 @@ def api_check_place_rank():
     import urllib.parse as _ulp
 
     data      = request.get_json(force=True) or {}
-    keywords  = data.get("keywords", [])
+    keywords_raw = data.get("keywords", [])
     place_url = data.get("url", "")
+
+    # URL 인코딩된 keyword 안전 디코딩 (한글 %XX → 정상 문자열)
+    from urllib.parse import unquote_plus as _uqp
+    def _safe_decode_kw(kw):
+        if not kw:
+            return kw
+        try:
+            # %XX 형태면 디코딩, 아니면 그대로
+            return _uqp(kw) if '%' in kw else kw
+        except Exception:
+            return kw
+    keywords = [_safe_decode_kw(k) for k in keywords_raw]
 
     if not place_url:
         return jsonify({"ok": False, "error": "url 필요"})
