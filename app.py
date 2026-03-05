@@ -848,7 +848,7 @@ def api_fetch_place_name():
     if not place_url:
         return jsonify({"ok": False, "error": "url 파라미터 없음"})
 
-    m = re.search(r'/(?:place|restaurant|cafe|hospital|beauty|hairshop|store)/(\d+)', place_url)
+    m = re.search(r'naver\.com/[^/?#]+/(\d+)', place_url)
     if not m:
         return jsonify({"ok": False, "error": "플레이스 URL에서 ID를 찾을 수 없음"})
 
@@ -920,7 +920,7 @@ def api_fetch_place_spots():
     if not place_url:
         return jsonify({"ok": False, "error": "url 파라미터 없음"})
 
-    m = re.search(r'/(?:place|restaurant|cafe|hospital|beauty|hairshop|store)/(\d+)', place_url)
+    m = re.search(r'naver\.com/[^/?#]+/(\d+)', place_url)
     if not m:
         return jsonify({"ok": False, "error": "플레이스 ID 추출 실패"})
     pid = m.group(1)
@@ -1144,7 +1144,7 @@ def api_check_place_rank():
     if not place_url:
         return jsonify({"ok": False, "error": "url 필요"})
 
-    m = re.search(r'/(?:place|restaurant|cafe|hospital|beauty|hairshop|store)/(\d+)', place_url)
+    m = re.search(r'naver\.com/[^/?#]+/(\d+)', place_url)
     if not m:
         return jsonify({"ok": False, "error": "플레이스 URL에서 ID 추출 실패"})
     target_id = m.group(1)
