@@ -1175,15 +1175,19 @@ def api_check_place_rank():
     rank_blocked = False
 
     def _extract_place_ids_mmap(kw):
-        """m.map.naver.com/search2 방식 - /place/{id} 패턴 추출 (가장 정확)"""
+        """m.map.naver.com/search2 방식 - place ID 추출 (URL + JSON 패턴 이중 확인)"""
         try:
             url = f"https://m.map.naver.com/search2/search.naver?query={_ulp.quote(kw)}&type=PLACE"
-            r = req.get(url, headers=headers_m, timeout=12)
+            r = req.get(url, headers=headers_m, timeout=10)
             if r.status_code != 200:
                 return None, f"HTTP {r.status_code}"
-            ids = re.findall(r'/place/(\d{8,12})', r.text)
-            unique_ids = list(dict.fromkeys(ids))
-            return unique_ids, "mmap"
+            # 패턴1: /place/{id} URL 패턴 (일반)
+            url_ids = re.findall(r'/place/(\d{8,12})', r.text)
+            # 패턴2: "id":숫자 JSON 패턴 (Render 서버 봇 환경 대비)
+            json_ids = re.findall(r'"id"\s*:\s*(\d{8,12})', r.text)
+            # 합산: URL 패턴 우선 + JSON 전용 ID 추가 (중복 제거)
+            combined = list(dict.fromkeys(url_ids + [i for i in json_ids if i not in url_ids]))
+            return combined, "mmap"
         except Exception as e:
             return None, str(e)[:60]
 
@@ -1191,14 +1195,14 @@ def api_check_place_rank():
         """m.search.naver.com 모바일 검색 방식"""
         try:
             url = f"https://m.search.naver.com/search.naver?where=m&query={_ulp.quote(kw)}"
-            r = req.get(url, headers=headers_m, timeout=15)
+            r = req.get(url, headers=headers_m, timeout=10)
             r.encoding = "utf-8"
             text = r.text
             
             # URL 패턴들 (m.search는 businessId JSON 없음, place URL 패턴 사용)
             # /restaurant/{id}, /cafe/{id}, /place/{id} 등
             url_ids = re.findall(r'place\.naver\.com/[^/]+/(\d{8,12})', text)
-            html_ids = re.findall(r'/(?:restaurant|cafe|place|hospital|beauty)/(\d{8,12})', text)
+            html_ids = re.findall(r'naver\.com/[^/?#]+/(\d{8,12})', text)
             
             # 통합 및 순서 유지 (URL 패턴 우선)
             all_ids = list(dict.fromkeys(url_ids + html_ids))
@@ -1250,32 +1254,37 @@ def api_check_place_rank():
                 result["has_section"] = has_sec
                 result["method"] = "m.map"
                 
-                if not has_sec:
-                    result["message"] = "플레이스 구좌 없음 — 키워드 변경 필요 ⚠️"
-                    rank_blocked = True
-                elif target_id in mmap_ids[:30]:
+                if target_id in mmap_ids[:30]:
+                    # mmap에서 순위 확인
                     rank = mmap_ids.index(target_id) + 1
                     result["rank"] = rank
+                    result["has_section"] = True
                     result["message"] = f"✅ {rank}위 확인 (m.map)"
                     if rank > 10:
                         result["message"] = f"⚠️ {rank}위 — 10위 밖, 키워드 변경 권장"
                         rank_blocked = True
                 else:
-                    # mmap에 없으면 m.search로 재확인
+                    # mmap 30위 밖 or 결과 없음 → m.search로 재확인
                     msearch_ids, has_sec2, msearch_msg = _extract_place_ids_msearch(kw)
-                    result["has_section"] = has_sec2
                     result["method"] = "m.search(fallback)"
                     
                     if msearch_ids and target_id in msearch_ids[:30]:
                         rank = msearch_ids.index(target_id) + 1
                         result["rank"] = rank
+                        result["has_section"] = True
                         result["message"] = f"✅ {rank}위 확인 (검색)"
                         if rank > 10:
                             result["message"] = f"⚠️ {rank}위 — 10위 밖"
                             rank_blocked = True
-                    else:
-                        total = len(mmap_ids)
+                    elif has_sec2:
+                        # 구좌는 있으나 30위 밖
+                        total = len(mmap_ids) if mmap_ids else len(msearch_ids or [])
+                        result["has_section"] = True
                         result["message"] = f"플레이스 구좌 있으나 30위 밖 (총 {total}개) ⚠️"
+                        rank_blocked = True
+                    else:
+                        result["has_section"] = has_sec2
+                        result["message"] = "플레이스 구좌 없음 — 키워드 변경 필요 ⚠️"
                         rank_blocked = True
             else:
                 # m.map 실패 → m.search 시도
